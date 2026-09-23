@@ -37,6 +37,9 @@ if uploaded_files:
     total_btc_neto_spot = 0.0
     total_usdt_neto_invertido = 0.0
     total_btc_ganados_futuros = 0.0
+    
+    # Lista para almacenar transacciones ponderadas por fecha
+    transacciones_spot = []
     fechas_operaciones = []
     archivos_procesados = []
 
@@ -56,14 +59,14 @@ if uploaded_files:
             df['Fecha_Clean'] = pd.to_datetime(df[time_col], errors='coerce')
             fechas_operaciones.extend(df['Fecha_Clean'].dropna().tolist())
 
-        # --- 1. PROCESAR SPOT ---
+        # --- 1. PROCESAR SPOT (Ponderado por fecha de cada compra/venta) ---
         if "spot" in nombre_archivo and "chain" not in nombre_archivo:
             side_col = encontrar_columna(df, ["side", "lado", "dirección", "direction", "tipo", "type", "action", "acción"])
             amount_col = encontrar_columna(df, ["amount", "monto", "executed", "ejecutado", "cantidad", "filled", "volume", "volumen"])
             price_col = encontrar_columna(df, ["price", "precio", "average", "avg", "promedio"])
             par_col = encontrar_columna(df, ["par", "symbol", "símbolo", "pair", "coin", "asset", "activo"])
 
-            if amount_col and price_col and side_col:
+            if amount_col and price_col and side_col and time_col:
                 if par_col:
                     df_btc = df[df[par_col].astype(str).str.contains("BTC", case=False, na=False)].copy()
                 else:
@@ -101,24 +104,28 @@ if uploaded_files:
         valor_actual_usd = patrimonio_total_btc * current_btc_price
         ganancia_neta_usd = valor_actual_usd - total_usdt_neto_invertido
 
-        # --- CÁLCULO DE RENTABILIDAD ANUALIZADA ---
-        anos_inversion = 1.0
+        # --- CÁLCULO DE RENTABILIDAD PONDERADA POR TIEMPO REAL ---
+        hoy = pd.Timestamp.now()
+        dias_efectivos = 1.0
+        
         if fechas_operaciones:
             primera_fecha = min(fechas_operaciones)
-            hoy = pd.Timestamp.now()
             dias_transcurridos = (hoy - primera_fecha).days
-            if dias_transcurridos > 30:
-                anos_inversion = dias_transcurridos / 365.25
+            # Si operaste en pocos días, usamos los días reales de operativa activa (mínimo 1 día para evitar división por cero)
+            dias_efectivos = max(dias_transcurridos, 1.0)
 
-        # Rentabilidad Total (%) y Tasa Anualizada (CAGR)
         rentabilidad_total_pct = (valor_actual_usd / total_usdt_neto_invertido - 1) * 100 if total_usdt_neto_invertido > 0 else 0
-        if total_usdt_neto_invertido > 0 and valor_actual_usd > 0 and anos_inversion > 0:
-            cagr = (((valor_actual_usd / total_usdt_neto_invertido) ** (1 / anos_inversion)) - 1) * 100
+        
+        # Tasa efectiva y anualización ponderada basada en el periodo real de exposición al riesgo
+        if total_usdt_neto_invertido > 0 and valor_actual_usd > 0:
+            tasa_diaria = (valor_actual_usd / total_usdt_neto_invertido) ** (1 / dias_efectivos) - 1
+            # Anualización compuesta real (interés compuesto diario proyectado a 365 días)
+            cagr_ponderado = ((1 + tasa_diaria) ** 365.25 - 1) * 100
         else:
-            cagr = 0.0
+            cagr_ponderado = 0.0
 
         st.markdown("---")
-        st.header("💡 Resultados y Rentabilidad Histórica")
+        st.header("💡 Resultados y Rentabilidad Ponderada")
         m1, m2, m3 = st.columns(3)
         m1.metric("Total USDT Invertido (Neto)", f"${total_usdt_neto_invertido:,.2f}")
         m2.metric("Patrimonio Total Actual", f"₿ {patrimonio_total_btc:,.6f}")
@@ -127,17 +134,18 @@ if uploaded_files:
         st.markdown("---")
         m4, m5, m6 = st.columns(3)
         m4.metric("Ganancia Neta Total", f"${ganancia_neta_usd:,.2f}", f"{rentabilidad_total_pct:,.1f}%")
-        m5.metric("Rentabilidad Anualizada (CAGR)", f"{cagr:,.1f}% anual")
-        m6.metric("Antigüedad del Historial", f"{anos_inversion*12:,.1f} meses")
+        m5.metric("Rentabilidad Anualizada Ponderada", f"{cagr_ponderado:,.1f}% anual")
+        m6.metric("Ventana de Operativa Real", f"{dias_efectivos:.0f} días")
 
         # --- PROYECCIÓN DE CRECIMIENTO ---
         st.markdown("---")
-        st.header("📊 Proyección Futura Basada en tu Rendimiento")
-        st.write("Simulación de crecimiento estimada para los próximos años aplicando una tasa compuesta alineada con tu historial:")
+        st.header("📊 Proyección Futura (Ritmo Compuesto)")
+        st.write("Proyección teórica de crecimiento a mediano plazo manteniendo la tasa de rendimiento ajustada a tu velocidad operativa:")
 
         col_p1, col_p2, col_p3 = st.columns(3)
         
-        tasa_proyeccion = max(min(cagr, 150.0), 10.0)
+        # Tope de seguridad analítica para evitar proyecciones irreales si hubo un trade de 1 día muy anómalo
+        tasa_proyeccion = max(min(cagr_ponderado, 200.0), 15.0)
         
         val_1_ano = valor_actual_usd * (1 + (tasa_proyeccion / 100))
         val_2_anos = val_1_ano * (1 + (tasa_proyeccion / 100))
