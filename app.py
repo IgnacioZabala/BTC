@@ -12,7 +12,6 @@ def get_live_btc_price():
     except Exception:
         return 65000.0
 
-# Función segura para encontrar columnas sin que la app colapse
 def encontrar_columna(df, palabras_clave):
     for col in df.columns:
         if any(palabra in col.lower() for palabra in palabras_clave):
@@ -20,115 +19,104 @@ def encontrar_columna(df, palabras_clave):
     return None
 
 st.title("📈 Analizador de Estrategia BTC: DCA + Futuros (M-Moneda)")
-
 precio_actual_real = get_live_btc_price()
 
 col1, col2 = st.columns([2, 1])
 with col1:
-    uploaded_file = st.file_uploader("Sube tu archivo CSV general de BingX", type=["csv"])
-with col2:
-    current_btc_price = st.number_input(
-        "Precio actual de BTC (USD)", 
-        min_value=1.0, value=precio_actual_real, step=100.0
+    # EL CAMBIO MÁGICO: accept_multiple_files=True
+    uploaded_files = st.file_uploader(
+        "Sube tus archivos CSV de BingX (Puedes seleccionar varios a la vez)", 
+        type=["csv"], 
+        accept_multiple_files=True
     )
+with col2:
+    current_btc_price = st.number_input("Precio actual de BTC (USD)", min_value=1.0, value=precio_actual_real, step=100.0)
     st.caption(f"🟢 Precio cargado: ${precio_actual_real:,.2f}")
 
-if uploaded_file is not None:
-    # Intentamos leer el archivo
-    try:
-        df = pd.read_csv(uploaded_file)
-    except Exception:
-        st.error("❌ El archivo no se pudo leer. Asegúrate de que sea un CSV válido.")
-        st.stop()
-
-    if df.empty:
-        st.warning("⚠️ El archivo está vacío (no tiene operaciones).")
-        st.stop()
-
-    # Buscar columnas de forma segura
-    account_col = encontrar_columna(df, ["cuenta", "account", "tipo", "type"])
-    side_col = encontrar_columna(df, ["side", "lado", "dirección", "direction"])
-    amount_col = encontrar_columna(df, ["amount", "monto", "executed", "ejecutado", "cantidad"])
-    price_col = encontrar_columna(df, ["price", "precio"])
-
-    # Validar que existan las columnas mínimas
-    if not account_col:
-        st.error(f"❌ No se pudo identificar la columna de 'Cuenta'. Las columnas de tu archivo son: {', '.join(df.columns)}")
-        st.stop()
-
-    if not amount_col or not price_col:
-        st.error("❌ No se encontraron las columnas de 'Monto' o 'Precio'. Verifica que sea el historial de órdenes.")
-        st.stop()
-
-    # --- 1. ANÁLISIS SPOT ---
-    df_spot = df[df[account_col].astype(str).str.contains("Spot", case=False, na=False)]
-    
+if uploaded_files:
     total_btc_comprados = 0.0
     total_usdt_invertidos = 0.0
-    dca_promedio = 0.0
-
-    if not df_spot.empty and side_col:
-        df_spot_buy = df_spot[
-            (df_spot[side_col].astype(str).str.contains("Buy", case=False, na=False) | 
-             df_spot[side_col].astype(str).str.contains("Compra", case=False, na=False))
-        ].copy()
-        
-        # Filtro de BTC si existe la columna de par
-        par_col = encontrar_columna(df, ["par", "symbol"])
-        if par_col:
-            df_spot_buy = df_spot_buy[df_spot_buy[par_col].astype(str).str.contains("BTC", case=False, na=False)]
-        
-        df_spot_buy[amount_col] = pd.to_numeric(df_spot_buy[amount_col], errors='coerce').fillna(0)
-        df_spot_buy[price_col] = pd.to_numeric(df_spot_buy[price_col], errors='coerce').fillna(0)
-        df_spot_buy['USDT_Invertidos'] = df_spot_buy[amount_col] * df_spot_buy[price_col]
-        
-        total_btc_comprados = df_spot_buy[amount_col].sum()
-        total_usdt_invertidos = df_spot_buy['USDT_Invertidos'].sum()
-        dca_promedio = total_usdt_invertidos / total_btc_comprados if total_btc_comprados > 0 else 0
-
-    # --- 2. ANÁLISIS FUTUROS ---
-    df_m_moneda = df[df[account_col].astype(str).str.contains("M-Moneda|Perpetuo|Coin-M", case=False, na=False)].copy()
     total_btc_ganados_futuros = 0.0
-    
-    if not df_m_moneda.empty:
-        pnl_col = encontrar_columna(df_m_moneda, ["pnl", "ganancia", "profit", "realized"])
-        if pnl_col:
-            df_m_moneda['PnL_BTC'] = pd.to_numeric(df_m_moneda[pnl_col], errors='coerce').fillna(0)
-            total_btc_ganados_futuros = df_m_moneda['PnL_BTC'].sum()
+    archivos_procesados = []
 
-    # --- 3. RESULTADOS GLOBALES ---
-    patrimonio_total_btc = total_btc_comprados + total_btc_ganados_futuros
-    valor_actual_usd = patrimonio_total_btc * current_btc_price
-    ganancia_neta_usd = valor_actual_usd - total_usdt_invertidos
+    for file in uploaded_files:
+        try:
+            df = pd.read_csv(file)
+        except Exception:
+            continue
+        
+        if df.empty:
+            continue
 
-    st.markdown("---")
-    st.header("💡 Resultados de tu Estrategia")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Precio Promedio Compra (DCA)", f"${dca_promedio:,.2f}")
-    m2.metric("Total USDT Invertido", f"${total_usdt_invertidos:,.2f}")
-    m3.metric("BTC Comprados (Spot)", f"₿ {total_btc_comprados:,.6f}")
-    
-    st.markdown("---")
-    m4, m5, m6 = st.columns(3)
-    m4.metric("BTC Ganados (Futuros M-Moneda)", f"₿ {total_btc_ganados_futuros:,.6f}")
-    m5.metric("Patrimonio Total Actual", f"₿ {patrimonio_total_btc:,.6f}")
-    m6.metric("Valorización Actual (USD)", f"${valor_actual_usd:,.2f}")
-    
-    st.markdown("---")
-    st.subheader(f"🚀 Ganancia Neta Total en USD: ${ganancia_neta_usd:,.2f}")
+        nombre_archivo = file.name.lower()
 
-    # --- 4. SIMULADOR DE SALIDA ---
-    st.markdown("---")
-    st.header("🎯 Simulador de Toma de Ganancias")
-    precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=int(current_btc_price), max_value=300000, value=180000, step=5000)
-    valor_futuro_usd = patrimonio_total_btc * precio_objetivo
-    ganancia_futura_usd = valor_futuro_usd - total_usdt_invertidos
+        # --- 1. PROCESAR COMPRAS SPOT ---
+        if "spot" in nombre_archivo:
+            side_col = encontrar_columna(df, ["side", "lado", "dirección", "direction", "tipo"])
+            amount_col = encontrar_columna(df, ["amount", "monto", "executed", "ejecutado", "cantidad", "filled"])
+            price_col = encontrar_columna(df, ["price", "precio", "average"])
+            par_col = encontrar_columna(df, ["par", "symbol", "símbolo"])
 
-    c1, c2 = st.columns(2)
-    c1.info(f"**Valor del Portafolio a ${precio_objetivo:,}:** \n\n ### ${valor_futuro_usd:,.2f}")
-    c2.success(f"**Ganancia Neta Proyectada:** \n\n ### ${ganancia_futura_usd:,.2f}")
+            if amount_col and price_col and side_col:
+                df_buy = df[df[side_col].astype(str).str.contains("Buy|Compra", case=False, na=False)].copy()
+                
+                if par_col:
+                    df_buy = df_buy[df_buy[par_col].astype(str).str.contains("BTC", case=False, na=False)]
+                
+                df_buy[amount_col] = pd.to_numeric(df_buy[amount_col], errors='coerce').fillna(0)
+                df_buy[price_col] = pd.to_numeric(df_buy[price_col], errors='coerce').fillna(0)
+                df_buy['USDT_Invertidos'] = df_buy[amount_col] * df_buy[price_col]
+                
+                total_btc_comprados += df_buy[amount_col].sum()
+                total_usdt_invertidos += df_buy['USDT_Invertidos'].sum()
+                archivos_procesados.append(file.name)
 
-# --- 5. CALCULADORA DE MARGEN ---
+        # --- 2. PROCESAR FUTUROS M-MONEDA ---
+        elif "coin_m" in nombre_archivo or "m_moneda" in nombre_archivo:
+            pnl_col = encontrar_columna(df, ["pnl", "ganancia", "profit", "realized"])
+            if pnl_col:
+                df['PnL_BTC'] = pd.to_numeric(df[pnl_col], errors='coerce').fillna(0)
+                total_btc_ganados_futuros += df['PnL_BTC'].sum()
+                archivos_procesados.append(file.name)
+
+    if len(archivos_procesados) > 0:
+        st.success(f"✅ Archivos analizados con éxito: {', '.join(archivos_procesados)}")
+        
+        dca_promedio = total_usdt_invertidos / total_btc_comprados if total_btc_comprados > 0 else 0
+        patrimonio_total_btc = total_btc_comprados + total_btc_ganados_futuros
+        valor_actual_usd = patrimonio_total_btc * current_btc_price
+        ganancia_neta_usd = valor_actual_usd - total_usdt_invertidos
+
+        st.markdown("---")
+        st.header("💡 Resultados de tu Estrategia")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Precio Promedio Compra (DCA)", f"${dca_promedio:,.2f}")
+        m2.metric("Total USDT Invertido", f"${total_usdt_invertidos:,.2f}")
+        m3.metric("BTC Comprados (Spot)", f"₿ {total_btc_comprados:,.6f}")
+        
+        st.markdown("---")
+        m4, m5, m6 = st.columns(3)
+        m4.metric("BTC Ganados (Futuros M-Moneda)", f"₿ {total_btc_ganados_futuros:,.6f}")
+        m5.metric("Patrimonio Total Actual", f"₿ {patrimonio_total_btc:,.6f}")
+        m6.metric("Valorización Actual (USD)", f"${valor_actual_usd:,.2f}")
+        
+        st.markdown("---")
+        st.subheader(f"🚀 Ganancia Neta Total en USD: ${ganancia_neta_usd:,.2f}")
+
+        # --- SIMULADOR DE SALIDA ---
+        st.markdown("---")
+        st.header("🎯 Simulador de Toma de Ganancias")
+        precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=int(current_btc_price), max_value=300000, value=180000, step=5000)
+        valor_futuro_usd = patrimonio_total_btc * precio_objetivo
+        ganancia_futura_usd = valor_futuro_usd - total_usdt_invertidos
+
+        c1, c2 = st.columns(2)
+        c1.info(f"**Valor del Portafolio a ${precio_objetivo:,}:** \n\n ### ${valor_futuro_usd:,.2f}")
+        c2.success(f"**Ganancia Neta Proyectada:** \n\n ### ${ganancia_futura_usd:,.2f}")
+    else:
+        st.warning("⚠️ No se encontraron datos válidos de Spot o Coin-M en los archivos subidos.")
+
+# --- CALCULADORA DE MARGEN ---
 st.markdown("---")
 st.header("🛡️ Calculadora de Margen de Seguridad (M-Moneda)")
 c3, c4 = st.columns(2)
