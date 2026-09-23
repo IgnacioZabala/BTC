@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import requests
 import datetime
+import os
 
 st.set_page_config(page_title="Analizador BingX - DCA & Futuros", layout="wide")
 
-# Función blindada con múltiples fuentes públicas y control de errores visible
+@st.cache_data(ttl=60)
 def get_live_btc_price():
-    # Intento 1: CoinGecko API (ideal para servidores cloud por su alta disponibilidad)
     try:
         url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
         response = requests.get(url, timeout=3)
@@ -17,7 +17,6 @@ def get_live_btc_price():
     except Exception:
         pass
 
-    # Intento 2: Binance Public API alternativa
     try:
         url = "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT"
         response = requests.get(url, timeout=3)
@@ -27,7 +26,6 @@ def get_live_btc_price():
     except Exception:
         pass
 
-    # Si todo falla por restricciones de red de la nube, devolvemos un aviso
     return 65000.0, "Manual / Sin conexión"
 
 def encontrar_columna(df, palabras_clave):
@@ -38,13 +36,12 @@ def encontrar_columna(df, palabras_clave):
 
 st.title("📈 Analizador de Estrategia BTC: DCA + Futuros (M-Moneda)")
 
-# Obtenemos precio y fuente
 precio_actual_real, fuente_precio = get_live_btc_price()
 
 col1, col2 = st.columns([2, 1])
 with col1:
     uploaded_files = st.file_uploader(
-        "Sube tus archivos CSV de BingX", 
+        "Sube tus nuevos archivos CSV (Opcional: Si está vacío, lee los guardados en el sistema)", 
         type=["csv"], 
         accept_multiple_files=True
     )
@@ -65,14 +62,31 @@ with col2:
 
     st.caption(f"🟢 Estado de red: Sincronizado vía **{fuente_precio}** (${current_btc_price:,.2f})")
 
+# CARGA DE ARCHIVOS (Desde la subida web o por defecto desde los guardados en GitHub)
+dataframes_a_procesar = []
+
 if uploaded_files:
+    for f in uploaded_files:
+        dataframes_a_procesar.append(f)
+    st.info("📂 Analizando archivos subidos manualmente.")
+else:
+    # Buscar archivos predeterminados guardados en el repositorio
+    archivos_por_defecto = ["Spot_Account.csv", "Coin_M_Perpetual_Futures.csv"]
+    archivos_encontrados = [f for f in archivos_por_defecto if os.path.exists(f)]
+    
+    if archivos_encontrados:
+        for f in archivos_encontrados:
+            dataframes_a_procesar.append(f)
+        st.caption(f"📁 Leyendo reportes guardados automáticamente: {', '.join(archivos_encontrados)}")
+
+if dataframes_a_procesar:
     total_btc_neto_spot = 0.0
     total_usdt_neto_invertido = 0.0
     total_btc_ganados_futuros = 0.0
     fechas_operaciones = []
     archivos_procesados = []
 
-    for file in uploaded_files:
+    for file in dataframes_a_procesar:
         try:
             df = pd.read_csv(file)
         except Exception:
@@ -81,7 +95,8 @@ if uploaded_files:
         if df.empty:
             continue
 
-        nombre_archivo = file.name.lower()
+        # Identificar nombre del archivo fuente
+        nombre_archivo = file.name.lower() if hasattr(file, 'name') else str(file).lower()
         time_col = encontrar_columna(df, ["time", "fecha", "date"])
 
         if time_col:
@@ -115,7 +130,7 @@ if uploaded_files:
                 
                 total_btc_neto_spot += (btc_comprado - btc_vendido)
                 total_usdt_neto_invertido += (usd_invertido - usd_recuperado)
-                archivos_procesados.append(file.name)
+                archivos_procesados.append(nombre_archivo)
 
         # --- 2. PROCESAR FUTUROS M-MONEDA ---
         elif "coin_m" in nombre_archivo or "m_moneda" in nombre_archivo:
@@ -123,10 +138,10 @@ if uploaded_files:
             if pnl_col:
                 df['PnL_BTC'] = pd.to_numeric(df[pnl_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
                 total_btc_ganados_futuros += df['PnL_BTC'].sum()
-                archivos_procesados.append(file.name)
+                archivos_procesados.append(nombre_archivo)
 
     if len(archivos_procesados) > 0:
-        st.success(f"✅ Archivos analizados con éxito: {', '.join(archivos_procesados)}")
+        st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
         
         dca_promedio = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
         patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros
@@ -198,7 +213,7 @@ if uploaded_files:
         c1.info(f"**Valor del Portafolio a ${precio_objetivo:,}:** \n\n ### ${valor_futuro_usd:,.2f}")
         c2.success(f"**Ganancia Neta Proyectada:** \n\n ### ${ganancia_futura_usd:,.2f}")
     else:
-        st.warning("⚠️ Sube los archivos CSV correspondientes de BingX.")
+        st.warning("⚠️ No se pudieron procesar los archivos. Asegúrate de que estén guardados con los nombres correctos.")
 
 # --- CALCULADORA DE MARGEN ---
 st.markdown("---")
