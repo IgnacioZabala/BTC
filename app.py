@@ -106,7 +106,7 @@ if uploaded_files:
         if fechas_operaciones:
             primera_fecha = min(fechas_operaciones)
             hoy = pd.Timestamp.now()
-            dias_transcurridos = (hoy - primeira_fecha).days
+            dias_transcurridos = (hoy - primera_fecha).days
             if dias_transcurridos > 30:
                 anos_inversion = dias_transcurridos / 365.25
 
@@ -137,8 +137,7 @@ if uploaded_files:
 
         col_p1, col_p2, col_p3 = st.columns(3)
         
-        # Proyecciones a 1, 2 y 3 años usando el CAGR histórico (o limitándolo si es muy volátil)
-        tasa_proyeccion = max(min(cagr, 150.0), 10.0) # Tope conservador/realista para evitar saltos locos si el historial es muy corto
+        tasa_proyeccion = max(min(cagr, 150.0), 10.0)
         
         val_1_ano = valor_actual_usd * (1 + (tasa_proyeccion / 100))
         val_2_anos = val_1_ano * (1 + (tasa_proyeccion / 100))
