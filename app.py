@@ -5,27 +5,30 @@ import datetime
 
 st.set_page_config(page_title="Analizador BingX - DCA & Futuros", layout="wide")
 
-# Función conectada directamente a la API pública de BingX
-@st.cache_data(ttl=60)
+# Función blindada con múltiples fuentes públicas y control de errores visible
 def get_live_btc_price():
+    # Intento 1: CoinGecko API (ideal para servidores cloud por su alta disponibilidad)
     try:
-        # Endpoint público oficial de BingX para el ticker Spot de BTC-USDT
-        url = "https://open-api.bingx.com/openApi/spot/v1/market/ticker?symbol=BTC-USDT"
-        response = requests.get(url, timeout=5)
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+        response = requests.get(url, timeout=3)
         data = response.json()
-        # BingX devuelve la respuesta dentro de la clave 'data' -> 'last' o 'price'
-        if "data" in data:
-            precio = float(data["data"].get("last", data["data"].get("price", 65000.0)))
-            return precio
-        return 65000.0
+        if "bitcoin" in data and "usd" in data["bitcoin"]:
+            return float(data["bitcoin"]["usd"]), "CoinGecko"
     except Exception:
-        # Plan de respaldo por si la red de la nube falla momentáneamente
-        try:
-            url_backup = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
-            res_backup = requests.get(url_backup, timeout=3)
-            return float(res_backup.json()['price'])
-        except Exception:
-            return 65000.0
+        pass
+
+    # Intento 2: Binance Public API alternativa
+    try:
+        url = "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT"
+        response = requests.get(url, timeout=3)
+        data = response.json()
+        if "price" in data:
+            return float(data["price"]), "Binance Vision"
+    except Exception:
+        pass
+
+    # Si todo falla por restricciones de red de la nube, devolvemos un aviso
+    return 65000.0, "Manual / Sin conexión"
 
 def encontrar_columna(df, palabras_clave):
     for col in df.columns:
@@ -35,7 +38,8 @@ def encontrar_columna(df, palabras_clave):
 
 st.title("📈 Analizador de Estrategia BTC: DCA + Futuros (M-Moneda)")
 
-precio_actual_real = get_live_btc_price()
+# Obtenemos precio y fuente
+precio_actual_real, fuente_precio = get_live_btc_price()
 
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -50,17 +54,16 @@ with col2:
         current_btc_price = st.number_input(
             "Precio actual de BTC (USD)", 
             min_value=1.0, 
-            value=precio_actual_real, 
+            value=float(precio_actual_real), 
             step=100.0
         )
     with sub_c2:
         st.write("") 
         st.write("") 
-        if st.button("🔄", help="Forzar actualización de precio en vivo"):
-            get_live_btc_price.clear()
+        if st.button("🔄", help="Forzar actualización"):
             st.rerun()
 
-    st.caption(f"🟢 Sincronizado con BingX API. Precio en vivo: ${precio_actual_real:,.2f}")
+    st.caption(f"🟢 Estado de red: Sincronizado vía **{fuente_precio}** (${current_btc_price:,.2f})")
 
 if uploaded_files:
     total_btc_neto_spot = 0.0
@@ -187,7 +190,7 @@ if uploaded_files:
         # --- SIMULADOR DE SALIDA ---
         st.markdown("---")
         st.header("🎯 Simulador de Toma de Ganancias (Objetivo de Ciclo)")
-        precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=int(current_btc_price), max_value=300000, value=180000, step=5000)
+        precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=10000, max_value=300000, value=180000, step=5000)
         valor_futuro_usd = patrimonio_total_btc * precio_objetivo
         ganancia_futura_usd = valor_futuro_usd - total_usdt_neto_invertido
 
@@ -218,4 +221,4 @@ if precio_entrada > 0:
     if margen_extra_necesario > 0:
         st.success(f"➕ **MARGEN EXTRA A AGREGAR MANUALMENTE:** ₿ {margen_extra_necesario:,.6f}")
     else:
-        st.success("✅ Thy margen inicial ya cubre esta caída.")
+        st.success("✅ Tu margen inicial ya cubre esta caída.")
