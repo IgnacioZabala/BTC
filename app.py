@@ -5,6 +5,8 @@ import datetime
 
 st.set_page_config(page_title="Analizador BingX - DCA & Futuros", layout="wide")
 
+# Función con caché de corta duración para no saturar la API de Binance
+@st.cache_data(ttl=60) # El precio se refresca automáticamente si pasan más de 60 segundos
 def get_live_btc_price():
     try:
         url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
@@ -20,6 +22,8 @@ def encontrar_columna(df, palabras_clave):
     return None
 
 st.title("📈 Analizador de Estrategia BTC: DCA + Futuros (M-Moneda)")
+
+# Al recargar la página (F5) o entrar, esto vuelve a consultar la API
 precio_actual_real = get_live_btc_price()
 
 col1, col2 = st.columns([2, 1])
@@ -30,8 +34,24 @@ with col1:
         accept_multiple_files=True
     )
 with col2:
-    current_btc_price = st.number_input("Precio actual de BTC (USD)", min_value=1.0, value=precio_actual_real, step=100.0)
-    st.caption(f"🟢 Precio cargado: ${precio_actual_real:,.2f}")
+    # Contenedor para el precio y el botón de refresco manual
+    sub_c1, sub_c2 = st.columns([3, 1])
+    with sub_c1:
+        current_btc_price = st.number_input(
+            "Precio actual de BTC (USD)", 
+            min_value=1.0, 
+            value=precio_actual_real, 
+            step=100.0
+        )
+    with sub_c2:
+        st.write("") # Espaciador visual
+        st.write("") 
+        if st.button("🔄", help="Forzar actualización de precio en vivo"):
+            # Limpiamos la caché para forzar la consulta inmediata a Binance
+            get_live_btc_price.clear()
+            st.rerun()
+
+    st.caption(f"🟢 Sincronizado con Binance. Precio en vivo: ${precio_actual_real:,.2f}")
 
 if uploaded_files:
     total_btc_neto_spot = 0.0
@@ -101,7 +121,7 @@ if uploaded_files:
         valor_actual_usd = patrimonio_total_btc * current_btc_price
         ganancia_neta_usd = valor_actual_usd - total_usdt_neto_invertido
 
-        # --- CÁLCULOS PONDERADOS POR TIEMPO REAL ---
+        # --- CÁLCULOS PONDERADOS ---
         hoy = pd.Timestamp.now()
         dias_efectivos = 1.0
         
@@ -116,10 +136,8 @@ if uploaded_files:
             tasa_diaria = (valor_actual_usd / total_usdt_neto_invertido) ** (1 / dias_efectivos) - 1
             cagr_ponderado = ((1 + tasa_diaria) ** 365.25 - 1) * 100
         else:
-            tasa_diaria = 0.0
             cagr_ponderado = 0.0
 
-        # --- NUEVOS CÁLCULOS: GANANCIA DIARIA Y CADA 30 DÍAS PONDERADA ---
         ganancia_diaria_usd = ganancia_neta_usd / dias_efectivos if dias_efectivos > 0 else 0.0
         ganancia_mensual_usd = ganancia_diaria_usd * 30.0
 
@@ -137,19 +155,16 @@ if uploaded_files:
         m5.metric("Rentabilidad Anualizada Ponderada", f"{cagr_ponderado:,.1f}% anual")
         m6.metric("Ventana de Operativa Real", f"{dias_efectivos:.0f} días")
 
-        # --- NUEVA SECCIÓN: MÉTRICAS DE GANANCIA POR PERIODO ---
         st.markdown("---")
         st.header("⏱️ Rendimiento Promedio Ponderado por Período")
-        
         mp1, mp2 = st.columns(2)
         mp1.metric("💵 Ganancia Diaria Promedio (USD)", f"${ganancia_diaria_usd:,.2f} / día")
         mp2.metric("📅 Ganancia Cada 30 Días Promedio (USD)", f"${ganancia_mensual_usd:,.2f} / mes")
 
-        # --- PROYECCIÓN DE CRECIMIENTO ---
+        # --- PROYECCIÓN ---
         st.markdown("---")
         st.header("📊 Proyección Futura (Ritmo Compuesto)")
         col_p1, col_p2, col_p3 = st.columns(3)
-        
         tasa_proyeccion = max(min(cagr_ponderado, 200.0), 15.0)
         
         val_1_ano = valor_actual_usd * (1 + (tasa_proyeccion / 100))
