@@ -33,8 +33,8 @@ with col2:
     st.caption(f"🟢 Precio cargado: ${precio_actual_real:,.2f}")
 
 if uploaded_files:
-    total_btc_comprados = 0.0
-    total_usdt_invertidos = 0.0
+    total_btc_neto_spot = 0.0
+    total_usdt_neto_invertido = 0.0
     total_btc_ganados_futuros = 0.0
     archivos_procesados = []
     errores_debug = []
@@ -50,36 +50,45 @@ if uploaded_files:
 
         nombre_archivo = file.name.lower()
 
-        # --- 1. PROCESAR COMPRAS SPOT ---
-        if "spot" in nombre_archivo and "chain" not in nombre_archivo: # Ignorar el ChainSpot que es para retiros/depósitos
-            # Búsqueda súper ampliada de columnas
+        # --- 1. PROCESAR SPOT (Compras y Ventas para calcular Neto) ---
+        if "spot" in nombre_archivo and "chain" not in nombre_archivo:
             side_col = encontrar_columna(df, ["side", "lado", "dirección", "direction", "tipo", "type", "action", "acción"])
             amount_col = encontrar_columna(df, ["amount", "monto", "executed", "ejecutado", "cantidad", "filled", "volume", "volumen"])
             price_col = encontrar_columna(df, ["price", "precio", "average", "avg", "promedio"])
             par_col = encontrar_columna(df, ["par", "symbol", "símbolo", "pair", "coin", "asset", "activo"])
 
             if amount_col and price_col and side_col:
-                # Filtrar solo compras (Buy)
-                df_buy = df[df[side_col].astype(str).str.contains("Buy|Compra|buy", case=False, na=False)].copy()
-                
-                # Filtrar solo Bitcoin
+                # Filtrar solo operaciones de BTC si existe la columna
                 if par_col:
-                    df_buy = df_buy[df_buy[par_col].astype(str).str.contains("BTC", case=False, na=False)]
-                
-                # SÚPER LIMPIEZA DE NÚMEROS (eliminar comas y espacios ocultos)
-                df_buy[amount_col] = pd.to_numeric(df_buy[amount_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
-                df_buy[price_col] = pd.to_numeric(df_buy[price_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
-                
-                df_buy['USDT_Invertidos'] = df_buy[amount_col] * df_buy[price_col]
-                
-                if df_buy[amount_col].sum() > 0:
-                    total_btc_comprados += df_buy[amount_col].sum()
-                    total_usdt_invertidos += df_buy['USDT_Invertidos'].sum()
-                    archivos_procesados.append(file.name)
+                    df_btc = df[df[par_col].astype(str).str.contains("BTC", case=False, na=False)].copy()
                 else:
-                    errores_debug.append(f"El archivo {file.name} se procesó, pero no se detectaron compras de BTC en el rango de fechas. (Tal vez exportaste un rango donde no compraste Spot).")
+                    df_btc = df.copy()
+                
+                # Limpieza de formato de números
+                df_btc[amount_col] = pd.to_numeric(df_btc[amount_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
+                df_btc[price_col] = pd.to_numeric(df_btc[price_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
+                
+                df_btc['Valor_USD'] = df_btc[amount_col] * df_btc[price_col]
+                
+                # Detectar Compras y Ventas
+                is_buy = df_btc[side_col].astype(str).str.contains("Buy|Compra|buy", case=False, na=False)
+                is_sell = df_btc[side_col].astype(str).str.contains("Sell|Venta|sell", case=False, na=False)
+                
+                # Sumar compras
+                btc_comprado = df_btc.loc[is_buy, amount_col].sum()
+                usd_invertido = df_btc.loc[is_buy, 'Valor_USD'].sum()
+                
+                # Restar ventas
+                btc_vendido = df_btc.loc[is_sell, amount_col].sum()
+                usd_recuperado = df_btc.loc[is_sell, 'Valor_USD'].sum()
+                
+                # Aplicar valores netos al total
+                total_btc_neto_spot += (btc_comprado - btc_vendido)
+                total_usdt_neto_invertido += (usd_invertido - usd_recuperado)
+                
+                archivos_procesados.append(file.name)
             else:
-                errores_debug.append(f"En {file.name} no se identificaron las columnas necesarias. Nombres exactos en tu archivo: {list(df.columns)}")
+                errores_debug.append(f"No se detectaron columnas válidas en {file.name}.")
 
         # --- 2. PROCESAR FUTUROS M-MONEDA ---
         elif "coin_m" in nombre_archivo or "m_moneda" in nombre_archivo:
@@ -88,30 +97,24 @@ if uploaded_files:
                 df['PnL_BTC'] = pd.to_numeric(df[pnl_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
                 total_btc_ganados_futuros += df['PnL_BTC'].sum()
                 archivos_procesados.append(file.name)
-            else:
-                errores_debug.append(f"Falta columna de PnL en {file.name}. Columnas detectadas: {list(df.columns)}")
 
     # MOSTRAR RESULTADOS
     if len(archivos_procesados) > 0:
         st.success(f"✅ Archivos analizados con éxito: {', '.join(archivos_procesados)}")
         
-        # Mostrar panel de depuración si hubo problemas con algún archivo
-        if errores_debug:
-            with st.expander("🛠️ Ver detalles de archivos no procesados (Haz clic aquí)"):
-                for err in errores_debug:
-                    st.warning(err)
+        # Evitar división por cero si vendió todo
+        dca_promedio = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
         
-        dca_promedio = total_usdt_invertidos / total_btc_comprados if total_btc_comprados > 0 else 0
-        patrimonio_total_btc = total_btc_comprados + total_btc_ganados_futuros
+        patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros
         valor_actual_usd = patrimonio_total_btc * current_btc_price
-        ganancia_neta_usd = valor_actual_usd - total_usdt_invertidos
+        ganancia_neta_usd = valor_actual_usd - total_usdt_neto_invertido
 
         st.markdown("---")
-        st.header("💡 Resultados de tu Estrategia")
+        st.header("💡 Resultados de tu Estrategia (Valores Netos)")
         m1, m2, m3 = st.columns(3)
-        m1.metric("Precio Promedio Compra (DCA)", f"${dca_promedio:,.2f}")
-        m2.metric("Total USDT Invertido", f"${total_usdt_invertidos:,.2f}")
-        m3.metric("BTC Comprados (Spot)", f"₿ {total_btc_comprados:,.6f}")
+        m1.metric("Precio Promedio de DCA (Neto)", f"${dca_promedio:,.2f}")
+        m2.metric("Total USDT Invertido (Neto)", f"${total_usdt_neto_invertido:,.2f}")
+        m3.metric("BTC Acumulados (Spot)", f"₿ {total_btc_neto_spot:,.6f}")
         
         st.markdown("---")
         m4, m5, m6 = st.columns(3)
@@ -127,13 +130,13 @@ if uploaded_files:
         st.header("🎯 Simulador de Toma de Ganancias")
         precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=int(current_btc_price), max_value=300000, value=180000, step=5000)
         valor_futuro_usd = patrimonio_total_btc * precio_objetivo
-        ganancia_futura_usd = valor_futuro_usd - total_usdt_invertidos
+        ganancia_futura_usd = valor_futuro_usd - total_usdt_neto_invertido
 
         c1, c2 = st.columns(2)
         c1.info(f"**Valor del Portafolio a ${precio_objetivo:,}:** \n\n ### ${valor_futuro_usd:,.2f}")
         c2.success(f"**Ganancia Neta Proyectada:** \n\n ### ${ganancia_futura_usd:,.2f}")
     else:
-        st.warning("⚠️ No se encontraron datos válidos. Revisa el archivo subido.")
+        st.warning("⚠️ Sube los archivos para comenzar el análisis.")
 
 # --- CALCULADORA DE MARGEN ---
 st.markdown("---")
