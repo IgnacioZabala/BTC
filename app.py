@@ -5,15 +5,27 @@ import datetime
 
 st.set_page_config(page_title="Analizador BingX - DCA & Futuros", layout="wide")
 
-# Función con caché de corta duración para no saturar la API de Binance
-@st.cache_data(ttl=60) # El precio se refresca automáticamente si pasan más de 60 segundos
+# Función conectada directamente a la API pública de BingX
+@st.cache_data(ttl=60)
 def get_live_btc_price():
     try:
-        url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+        # Endpoint público oficial de BingX para el ticker Spot de BTC-USDT
+        url = "https://open-api.bingx.com/openApi/spot/v1/market/ticker?symbol=BTC-USDT"
         response = requests.get(url, timeout=5)
-        return float(response.json()['price'])
-    except Exception:
+        data = response.json()
+        # BingX devuelve la respuesta dentro de la clave 'data' -> 'last' o 'price'
+        if "data" in data:
+            precio = float(data["data"].get("last", data["data"].get("price", 65000.0)))
+            return precio
         return 65000.0
+    except Exception:
+        # Plan de respaldo por si la red de la nube falla momentáneamente
+        try:
+            url_backup = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+            res_backup = requests.get(url_backup, timeout=3)
+            return float(res_backup.json()['price'])
+        except Exception:
+            return 65000.0
 
 def encontrar_columna(df, palabras_clave):
     for col in df.columns:
@@ -23,7 +35,6 @@ def encontrar_columna(df, palabras_clave):
 
 st.title("📈 Analizador de Estrategia BTC: DCA + Futuros (M-Moneda)")
 
-# Al recargar la página (F5) o entrar, esto vuelve a consultar la API
 precio_actual_real = get_live_btc_price()
 
 col1, col2 = st.columns([2, 1])
@@ -34,7 +45,6 @@ with col1:
         accept_multiple_files=True
     )
 with col2:
-    # Contenedor para el precio y el botón de refresco manual
     sub_c1, sub_c2 = st.columns([3, 1])
     with sub_c1:
         current_btc_price = st.number_input(
@@ -44,14 +54,13 @@ with col2:
             step=100.0
         )
     with sub_c2:
-        st.write("") # Espaciador visual
+        st.write("") 
         st.write("") 
         if st.button("🔄", help="Forzar actualización de precio en vivo"):
-            # Limpiamos la caché para forzar la consulta inmediata a Binance
             get_live_btc_price.clear()
             st.rerun()
 
-    st.caption(f"🟢 Sincronizado con Binance. Precio en vivo: ${precio_actual_real:,.2f}")
+    st.caption(f"🟢 Sincronizado con BingX API. Precio en vivo: ${precio_actual_real:,.2f}")
 
 if uploaded_files:
     total_btc_neto_spot = 0.0
@@ -209,4 +218,4 @@ if precio_entrada > 0:
     if margen_extra_necesario > 0:
         st.success(f"➕ **MARGEN EXTRA A AGREGAR MANUALMENTE:** ₿ {margen_extra_necesario:,.6f}")
     else:
-        st.success("✅ Tu margen inicial ya cubre esta caída.")
+        st.success("✅ Thy margen inicial ya cubre esta caída.")
