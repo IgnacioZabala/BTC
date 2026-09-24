@@ -36,7 +36,6 @@ def encontrar_columna(df, palabras_clave):
 
 st.title("📈 Analizador de Estrategia BTC: DCA + Futuros (M-Moneda)")
 
-# Inicializar el estado de la sesión para el precio si no existe
 if 'precio_manual' not in st.session_state:
     st.session_state.precio_manual = None
 
@@ -52,9 +51,7 @@ with col1:
 with col2:
     sub_c1, sub_c2 = st.columns([3, 1])
     with sub_c1:
-        # Si se presionó actualizar, borramos el valor manual para que tome el de la API
         val_inicial = st.session_state.precio_manual if st.session_state.precio_manual is not None else float(precio_api)
-        
         current_btc_price = st.number_input(
             "Precio actual de BTC (USD)", 
             min_value=1.0, 
@@ -62,15 +59,13 @@ with col2:
             step=100.0,
             key="input_precio_btc"
         )
-        # Actualizamos el estado con lo que el usuario ponga manualmente
         st.session_state.precio_manual = current_btc_price
-
     with sub_c2:
         st.write("") 
         st.write("") 
         if st.button("🔄", help="Forzar actualización de precio desde la API"):
             get_live_btc_price.clear()
-            st.session_state.precio_manual = None # Limpiamos la memoria manual para obligar al input a tomar el precio en vivo
+            st.session_state.precio_manual = None
             st.rerun()
 
     st.caption(f"🟢 Sincronizado vía **{fuente_precio}** (API: ${precio_api:,.2f})")
@@ -95,6 +90,8 @@ if dataframes_a_procesar:
     total_btc_neto_spot = 0.0
     total_usdt_neto_invertido = 0.0
     total_btc_ganados_futuros = 0.0
+    comisiones_btc_spot = 0.0
+    comisiones_btc_futuros = 0.0
     fechas_operaciones = []
     archivos_procesados = []
 
@@ -120,6 +117,8 @@ if dataframes_a_procesar:
             amount_col = encontrar_columna(df, ["amount", "monto", "executed", "ejecutado", "cantidad", "filled", "volume", "volumen"])
             price_col = encontrar_columna(df, ["price", "precio", "average", "avg", "promedio"])
             par_col = encontrar_columna(df, ["par", "symbol", "símbolo", "pair", "coin", "asset", "activo"])
+            fee_col = encontrar_columna(df, ["fee"])
+            fee_coin_col = encontrar_columna(df, ["fee coin", "feecoin"])
 
             if amount_col and price_col and side_col and time_col:
                 if par_col:
@@ -141,21 +140,37 @@ if dataframes_a_procesar:
                 
                 total_btc_neto_spot += (btc_comprado - btc_vendido)
                 total_usdt_neto_invertido += (usd_invertido - usd_recuperado)
+
+                # Sumar comisiones pagadas en BTC si existen
+                if fee_col and fee_coin_col:
+                    fee_btc_mask = df_btc[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
+                    comisiones_btc_spot += pd.to_numeric(df_btc.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
+
                 archivos_procesados.append(nombre_archivo)
 
         # --- 2. PROCESAR FUTUROS M-MONEDA ---
         elif "coin_m" in nombre_archivo or "m_moneda" in nombre_archivo:
             pnl_col = encontrar_columna(df, ["pnl", "ganancia", "profit", "realized", "realizado"])
+            fee_col = encontrar_columna(df, ["fee"])
+            fee_coin_col = encontrar_columna(df, ["fee coin", "feecoin"])
+
             if pnl_col:
                 df['PnL_BTC'] = pd.to_numeric(df[pnl_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
                 total_btc_ganados_futuros += df['PnL_BTC'].sum()
+
+                if fee_col and fee_coin_col:
+                    fee_btc_mask = df[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
+                    comisiones_btc_futuros += pd.to_numeric(df.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
+
                 archivos_procesados.append(nombre_archivo)
 
     if len(archivos_procesados) > 0:
         st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
         
         dca_promedio = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
-        patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros
+        
+        # Patrimonio total descontando comisiones netas en satoshis
+        patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros - (comisiones_btc_spot + comisiones_btc_futuros)
         valor_actual_usd = patrimonio_total_btc * current_btc_price
         ganancia_neta_usd = valor_actual_usd - total_usdt_neto_invertido
 
@@ -165,7 +180,7 @@ if dataframes_a_procesar:
         
         if fechas_operaciones:
             primera_fecha = min(fechas_operaciones)
-            dias_transcurridos = (hoy - primeira_fecha).days if 'primeira_fecha' in locals() else (hoy - primera_fecha).days
+            dias_transcurridos = (hoy - primera_fecha).days
             dias_efectivos = max(dias_transcurridos, 1.0)
 
         rentabilidad_total_pct = (valor_actual_usd / total_usdt_neto_invertido - 1) * 100 if total_usdt_neto_invertido > 0 else 0
@@ -180,11 +195,18 @@ if dataframes_a_procesar:
         ganancia_mensual_usd = ganancia_diaria_usd * 30.0
 
         st.markdown("---")
-        st.header("💡 Resultados y Rentabilidad Ponderada")
+        st.header("💡 Resultados y Desglose de Activos")
         
+        # Auditoría limpia de BTC
+        b1, b2, b3 = st.columns(3)
+        b1.metric("🟢 BTC Netos (Spot / DCA)", f"₿ {total_btc_neto_spot:,.6f}")
+        b2.metric("⚡ BTC Ganados (Futuros M-Moneda)", f"₿ {total_btc_ganados_futuros:,.6f}")
+        b3.metric("🔒 Patrimonio Total en BTC", f"₿ {patrimonio_total_btc:,.6f}")
+
+        st.markdown("---")
         m1, m2, m3 = st.columns(3)
         m1.metric("Total USDT Invertido (Neto)", f"${total_usdt_neto_invertido:,.2f}")
-        m2.metric("Patrimonio Total Actual", f"₿ {patrimonio_total_btc:,.6f}")
+        m2.metric("Precio Promedio DCA", f"${dca_promedio:,.2f}")
         m3.metric("Valorización Actual (USD)", f"${valor_actual_usd:,.2f}")
         
         st.markdown("---")
