@@ -26,7 +26,7 @@ def get_live_btc_price():
     except Exception:
         pass
 
-    return 65000.0, "Manual / Sin conexión"
+    return 83408.0, "Manual / Sin conexión"
 
 def encontrar_columna(df, palabras_clave):
     for col in df.columns:
@@ -36,7 +36,11 @@ def encontrar_columna(df, palabras_clave):
 
 st.title("📈 Analizador de Estrategia BTC: DCA + Futuros (M-Moneda)")
 
-precio_actual_real, fuente_precio = get_live_btc_price()
+# Inicializar el estado de la sesión para el precio si no existe
+if 'precio_manual' not in st.session_state:
+    st.session_state.precio_manual = None
+
+precio_api, fuente_precio = get_live_btc_price()
 
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -48,21 +52,30 @@ with col1:
 with col2:
     sub_c1, sub_c2 = st.columns([3, 1])
     with sub_c1:
+        # Si se presionó actualizar, borramos el valor manual para que tome el de la API
+        val_inicial = st.session_state.precio_manual if st.session_state.precio_manual is not None else float(precio_api)
+        
         current_btc_price = st.number_input(
             "Precio actual de BTC (USD)", 
             min_value=1.0, 
-            value=float(precio_actual_real), 
-            step=100.0
+            value=val_inicial, 
+            step=100.0,
+            key="input_precio_btc"
         )
+        # Actualizamos el estado con lo que el usuario ponga manualmente
+        st.session_state.precio_manual = current_btc_price
+
     with sub_c2:
         st.write("") 
         st.write("") 
-        if st.button("🔄", help="Forzar actualización"):
+        if st.button("🔄", help="Forzar actualización de precio desde la API"):
+            get_live_btc_price.clear()
+            st.session_state.precio_manual = None # Limpiamos la memoria manual para obligar al input a tomar el precio en vivo
             st.rerun()
 
-    st.caption(f"🟢 Estado de red: Sincronizado vía **{fuente_precio}** (${current_btc_price:,.2f})")
+    st.caption(f"🟢 Sincronizado vía **{fuente_precio}** (API: ${precio_api:,.2f})")
 
-# CARGA DE ARCHIVOS (Desde la subida web o por defecto desde los guardados en GitHub)
+# CARGA DE ARCHIVOS
 dataframes_a_procesar = []
 
 if uploaded_files:
@@ -70,7 +83,6 @@ if uploaded_files:
         dataframes_a_procesar.append(f)
     st.info("📂 Analizando archivos subidos manualmente.")
 else:
-    # Buscar archivos predeterminados guardados en el repositorio
     archivos_por_defecto = ["Spot_Account.csv", "Coin_M_Perpetual_Futures.csv"]
     archivos_encontrados = [f for f in archivos_por_defecto if os.path.exists(f)]
     
@@ -95,7 +107,6 @@ if dataframes_a_procesar:
         if df.empty:
             continue
 
-        # Identificar nombre del archivo fuente
         nombre_archivo = file.name.lower() if hasattr(file, 'name') else str(file).lower()
         time_col = encontrar_columna(df, ["time", "fecha", "date"])
 
@@ -154,7 +165,7 @@ if dataframes_a_procesar:
         
         if fechas_operaciones:
             primera_fecha = min(fechas_operaciones)
-            dias_transcurridos = (hoy - primera_fecha).days
+            dias_transcurridos = (hoy - primeira_fecha).days if 'primeira_fecha' in locals() else (hoy - primera_fecha).days
             dias_efectivos = max(dias_transcurridos, 1.0)
 
         rentabilidad_total_pct = (valor_actual_usd / total_usdt_neto_invertido - 1) * 100 if total_usdt_neto_invertido > 0 else 0
@@ -213,7 +224,7 @@ if dataframes_a_procesar:
         c1.info(f"**Valor del Portafolio a ${precio_objetivo:,}:** \n\n ### ${valor_futuro_usd:,.2f}")
         c2.success(f"**Ganancia Neta Proyectada:** \n\n ### ${ganancia_futura_usd:,.2f}")
     else:
-        st.warning("⚠️ No se pudieron procesar los archivos. Asegúrate de que estén guardados con los nombres correctos.")
+        st.warning("⚠️ No se pudieron procesar los archivos.")
 
 # --- CALCULADORA DE MARGEN ---
 st.markdown("---")
