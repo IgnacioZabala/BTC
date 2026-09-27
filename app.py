@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import datetime
 import os
+import re
 
 st.set_page_config(page_title="Analizador BingX - DCA & Futuros", layout="wide")
 
@@ -34,6 +35,17 @@ def encontrar_columna(df, palabras_clave):
             return col
     return None
 
+def obtener_url_descarga_drive(url):
+    """Convierte un link de visualización de Drive en un link de descarga directa para Pandas."""
+    if not url:
+        return None
+    # Busca el ID del archivo en el formato estándar de Drive
+    match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
+    if match:
+        file_id = match.group(1)
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
+    return url
+
 st.title("📈 Analizador de Estrategia BTC: DCA + Futuros (M-Moneda)")
 
 if 'precio_manual' not in st.session_state:
@@ -41,13 +53,20 @@ if 'precio_manual' not in st.session_state:
 
 precio_api, fuente_precio = get_live_btc_price()
 
+# --- CONFIGURACIÓN DE GOOGLE DRIVE ---
+st.sidebar.header("🔗 Conexión a Google Drive")
+st.sidebar.markdown("Pega aquí los enlaces compartidos de tus archivos CSV. (Asegúrate de que el acceso sea público/cualquiera con el enlace).")
+
+# Puedes reemplazar el string vacío con tus enlaces fijos si no quieres ingresarlos cada vez
+URL_DEFECTO_SPOT = "" 
+URL_DEFECTO_FUTUROS = ""
+
+link_spot = st.sidebar.text_input("Enlace CSV Spot", URL_DEFECTO_SPOT)
+link_futuros = st.sidebar.text_input("Enlace CSV Futuros", URL_DEFECTO_FUTUROS)
+
 col1, col2 = st.columns([2, 1])
 with col1:
-    uploaded_files = st.file_uploader(
-        "Sube tus nuevos archivos CSV (Opcional: Si está vacío, lee los guardados en el sistema)", 
-        type=["csv"], 
-        accept_multiple_files=True
-    )
+    st.info("🔄 Los datos se sincronizarán automáticamente desde Google Drive si los enlaces están configurados en el panel lateral.")
 with col2:
     sub_c1, sub_c2 = st.columns([3, 1])
     with sub_c1:
@@ -71,22 +90,27 @@ with col2:
     st.caption(f"🟢 Sincronizado vía **{fuente_precio}** (API: ${precio_api:,.2f})")
 
 # CARGA DE ARCHIVOS
-dataframes_a_procesar = []
+# Usaremos una lista de tuplas con formato: (ruta_o_url, nombre_simulado_para_logica)
+archivos_a_procesar = []
 
-if uploaded_files:
-    for f in uploaded_files:
-        dataframes_a_procesar.append(f)
-    st.info("📂 Analizando archivos subidos manualmente.")
-else:
+if link_spot:
+    url_directa = obtener_url_descarga_drive(link_spot)
+    archivos_a_procesar.append((url_directa, "spot_drive.csv"))
+
+if link_futuros:
+    url_directa = obtener_url_descarga_drive(link_futuros)
+    archivos_a_procesar.append((url_directa, "coin_m_drive.csv"))
+
+# Opcional: Fallback a archivos locales si no se configuraron URLs en Drive
+if not archivos_a_procesar:
     archivos_por_defecto = ["Spot_Account.csv", "Coin_M_Perpetual_Futures.csv"]
     archivos_encontrados = [f for f in archivos_por_defecto if os.path.exists(f)]
-    
     if archivos_encontrados:
         for f in archivos_encontrados:
-            dataframes_a_procesar.append(f)
-        st.caption(f"📁 Leyendo reportes guardados automáticamente: {', '.join(archivos_encontrados)}")
+            archivos_a_procesar.append((f, f.lower()))
+        st.caption(f"📁 Leyendo reportes locales: {', '.join(archivos_encontrados)}")
 
-if dataframes_a_procesar:
+if archivos_a_procesar:
     total_btc_neto_spot = 0.0
     total_usdt_neto_invertido = 0.0
     total_btc_ganados_futuros = 0.0
@@ -95,16 +119,17 @@ if dataframes_a_procesar:
     fechas_operaciones = []
     archivos_procesados = []
 
-    for file in dataframes_a_procesar:
+    for source, nombre_archivo in archivos_a_procesar:
         try:
-            df = pd.read_csv(file)
-        except Exception:
+            # Pandas soporta leer directamente desde una URL http/https
+            df = pd.read_csv(source)
+        except Exception as e:
+            st.error(f"Error al cargar {nombre_archivo}: {e}")
             continue
         
         if df.empty:
             continue
 
-        nombre_archivo = file.name.lower() if hasattr(file, 'name') else str(file).lower()
         time_col = encontrar_columna(df, ["time", "fecha", "date"])
 
         if time_col:
@@ -141,12 +166,11 @@ if dataframes_a_procesar:
                 total_btc_neto_spot += (btc_comprado - btc_vendido)
                 total_usdt_neto_invertido += (usd_invertido - usd_recuperado)
 
-                # Sumar comisiones pagadas en BTC si existen
                 if fee_col and fee_coin_col:
                     fee_btc_mask = df_btc[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
                     comisiones_btc_spot += pd.to_numeric(df_btc.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
 
-                archivos_procesados.append(nombre_archivo)
+                archivos_procesados.append("Spot (Google Drive)")
 
         # --- 2. PROCESAR FUTUROS M-MONEDA ---
         elif "coin_m" in nombre_archivo or "m_moneda" in nombre_archivo:
@@ -162,19 +186,16 @@ if dataframes_a_procesar:
                     fee_btc_mask = df[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
                     comisiones_btc_futuros += pd.to_numeric(df.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
 
-                archivos_procesados.append(nombre_archivo)
+                archivos_procesados.append("Futuros (Google Drive)")
 
     if len(archivos_procesados) > 0:
         st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
         
         dca_promedio = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
-        
-        # Patrimonio total descontando comisiones netas en satoshis
         patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros - (comisiones_btc_spot + comisiones_btc_futuros)
         valor_actual_usd = patrimonio_total_btc * current_btc_price
         ganancia_neta_usd = valor_actual_usd - total_usdt_neto_invertido
 
-        # --- CÁLCULOS PONDERADOS ---
         hoy = pd.Timestamp.now()
         dias_efectivos = 1.0
         
@@ -197,7 +218,6 @@ if dataframes_a_procesar:
         st.markdown("---")
         st.header("💡 Resultados y Desglose de Activos")
         
-        # Auditoría limpia de BTC
         b1, b2, b3 = st.columns(3)
         b1.metric("🟢 BTC Netos (Spot / DCA)", f"₿ {total_btc_neto_spot:,.6f}")
         b2.metric("⚡ BTC Ganados (Futuros M-Moneda)", f"₿ {total_btc_ganados_futuros:,.6f}")
@@ -221,7 +241,6 @@ if dataframes_a_procesar:
         mp1.metric("💵 Ganancia Diaria Promedio (USD)", f"${ganancia_diaria_usd:,.2f} / día")
         mp2.metric("📅 Ganancia Cada 30 Días Promedio (USD)", f"${ganancia_mensual_usd:,.2f} / mes")
 
-        # --- PROYECCIÓN ---
         st.markdown("---")
         st.header("📊 Proyección Futura (Ritmo Compuesto)")
         col_p1, col_p2, col_p3 = st.columns(3)
@@ -235,7 +254,6 @@ if dataframes_a_procesar:
         col_p2.info(f"**Proyección a 2 Años:** \n\n ### ${val_2_anos:,.2f}")
         col_p3.info(f"**Proyección a 3 Años:** \n\n ### ${val_3_anos:,.2f}")
 
-        # --- SIMULADOR DE SALIDA ---
         st.markdown("---")
         st.header("🎯 Simulador de Toma de Ganancias (Objetivo de Ciclo)")
         precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=10000, max_value=300000, value=180000, step=5000)
