@@ -59,7 +59,7 @@ st.sidebar.markdown("Pega aquí los enlaces compartidos de tus archivos CSV. (As
 
 # Puedes reemplazar el string vacío con tus enlaces fijos si no quieres ingresarlos cada vez
 URL_DEFECTO_SPOT = "1fdaxnayNzqE9XNBMfO1K6JDvcfowizzq" 
-URL_DEFECTO_FUTUROS = "1rgbrxHV40-Q5_ic3C1umWKfIanT2VTSA"
+URL_DEFECTO_FUTUROS = "https://drive.google.com/file/d/1rgbrxHV40-Q5_ic3C1umWKfIanT2VTSA/view?usp=sharing"
 
 link_spot = st.sidebar.text_input("Enlace CSV Spot", URL_DEFECTO_SPOT)
 link_futuros = st.sidebar.text_input("Enlace CSV Futuros", URL_DEFECTO_FUTUROS)
