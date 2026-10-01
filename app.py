@@ -64,13 +64,9 @@ link_futuros = st.sidebar.text_input("Enlace CSV Futuros", URL_DEFECTO_FUTUROS)
 
 st.sidebar.markdown("---")
 st.sidebar.header("💵 Conversión a USD")
-precio_venta_usdt = st.sidebar.number_input(
-    "Cotización de venta USDT a USD", 
-    value=1.000, 
-    step=0.005, 
-    format="%.3f",
-    help="A cuánto te toman cada USDT cuando liquidas a dólares americanos billete (ej. 0.99 si tienes 1% de comisión)."
-)
+# Conversión fijada en 1.04
+precio_venta_usdt = 1.04
+st.sidebar.info(f"Cotización fijada (USDT a USD billete): **{precio_venta_usdt}**")
 
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -228,9 +224,7 @@ if archivos_a_procesar:
         st.markdown("---")
         st.header("💡 Resultados y Desglose de Activos")
         
-        # --- NUEVA ESTRUCTURA SOLICITADA ---
-        
-        # 1. SPOT & DCA
+        # --- 1. SPOT & DCA ---
         st.subheader("🟢 Portafolio Spot (DCA)")
         valor_spot_usdt = total_btc_neto_spot * current_btc_price
         s1, s2, s3, s4 = st.columns(4)
@@ -239,19 +233,19 @@ if archivos_a_procesar:
         s3.metric("Valorización Spot (USDT)", f"${valor_spot_usdt:,.2f}")
         s4.metric("Precio DCA Promedio", f"${dca_promedio:,.2f}")
 
-        # 2. FUTUROS
+        # --- 2. FUTUROS ---
         st.subheader("⚡ Rendimientos en Futuros (M-Moneda)")
         valor_futuros_usdt = total_btc_ganados_futuros * current_btc_price
         f1, f2 = st.columns(2)
         f1.metric("BTC Ganados", f"₿ {total_btc_ganados_futuros:,.6f}")
         f2.metric("Valorización Futuros (USDT)", f"${valor_futuros_usdt:,.2f}")
 
-        # 3. TOTALES (USDT Y DÓLAR AMERICANO)
+        # --- 3. TOTALES (USDT Y DÓLAR AMERICANO) ---
         st.subheader("🔒 Patrimonio Total Consolidado")
         t1, t2, t3 = st.columns(3)
         t1.metric("Total BTC (Neto de fees)", f"₿ {patrimonio_total_btc:,.6f}")
         t2.metric("Valorización Total en USDT", f"₮ {valor_actual_usdt:,.2f}")
-        t3.metric("Valorización Total en USD", f"$ {valor_actual_usd_real:,.2f}", help="Calculado usando la cotización USDT a USD ingresada en el panel lateral.")
+        t3.metric("Valorización Total en USD", f"$ {valor_actual_usd_real:,.2f}", help="Calculado usando la cotización fijada de USDT a USD (x 1.04).")
 
         # --- SECCIONES ORIGINALES DE RENDIMIENTO ---
         st.markdown("---")
@@ -262,7 +256,7 @@ if archivos_a_procesar:
         m6.metric("Ventana de Operativa Real", f"{dias_efectivos:.0f} días")
 
         st.markdown("---")
-        st.header("⏱️️ Rendimiento Promedio Ponderado por Período")
+        st.header("⏱ Rendimiento Promedio Ponderado por Período")
         mp1, mp2 = st.columns(2)
         mp1.metric("💵 Ganancia Diaria Promedio (USD)", f"${ganancia_diaria_usd:,.2f} / día")
         mp2.metric("📅 Ganancia Cada 30 Días Promedio (USD)", f"${ganancia_mensual_usd:,.2f} / mes")
