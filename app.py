@@ -66,7 +66,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("💵 Conversión a USD")
 # Conversión fijada en 1.04
 precio_venta_usdt = 1.04
-st.sidebar.info(f"Cotización fijada (USDT a USD billete): **{precio_venta_usdt}**")
+st.sidebar.info(f"Cotización fijada (1 USDT = **{precio_venta_usdt}** USD billete). \n\n*Todos los montos del dashboard están calculados en USD reales.*")
 
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -76,7 +76,7 @@ with col2:
     with sub_c1:
         val_inicial = st.session_state.precio_manual if st.session_state.precio_manual is not None else float(precio_api)
         current_btc_price = st.number_input(
-            "Precio actual de BTC (USD)", 
+            "Precio actual de BTC (USDT Exchange)", 
             min_value=1.0, 
             value=val_inicial, 
             step=100.0,
@@ -91,7 +91,7 @@ with col2:
             st.session_state.precio_manual = None
             st.rerun()
 
-    st.caption(f"🟢 Sincronizado vía **{fuente_precio}** (API: ${precio_api:,.2f})")
+    st.caption(f"🟢 Sincronizado vía **{fuente_precio}** (API: ₮{precio_api:,.2f})")
 
 archivos_a_procesar = []
 
@@ -113,7 +113,7 @@ if not archivos_a_procesar:
 
 if archivos_a_procesar:
     total_btc_neto_spot = 0.0
-    total_usdt_neto_invertido = 0.0
+    total_usd_neto_invertido = 0.0
     total_btc_ganados_futuros = 0.0
     comisiones_btc_spot = 0.0
     comisiones_btc_futuros = 0.0
@@ -153,18 +153,20 @@ if archivos_a_procesar:
                 
                 df_btc[amount_col] = pd.to_numeric(df_btc[amount_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
                 df_btc[price_col] = pd.to_numeric(df_btc[price_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
-                df_btc['Valor_USD'] = df_btc[amount_col] * df_btc[price_col]
+                
+                # CÁLCULO DIRECTO EN USD REAL (Precio en USDT del exchange * 1.04)
+                df_btc['Valor_USD_Real'] = df_btc[amount_col] * df_btc[price_col] * precio_venta_usdt
                 
                 is_buy = df_btc[side_col].astype(str).str.contains("Buy|Compra|buy", case=False, na=False)
                 is_sell = df_btc[side_col].astype(str).str.contains("Sell|Venta|sell", case=False, na=False)
                 
                 btc_comprado = df_btc.loc[is_buy, amount_col].sum()
-                usd_invertido = df_btc.loc[is_buy, 'Valor_USD'].sum()
+                usd_invertido = df_btc.loc[is_buy, 'Valor_USD_Real'].sum()
                 btc_vendido = df_btc.loc[is_sell, amount_col].sum()
-                usd_recuperado = df_btc.loc[is_sell, 'Valor_USD'].sum()
+                usd_recuperado = df_btc.loc[is_sell, 'Valor_USD_Real'].sum()
                 
                 total_btc_neto_spot += (btc_comprado - btc_vendido)
-                total_usdt_neto_invertido += (usd_invertido - usd_recuperado)
+                total_usd_neto_invertido += (usd_invertido - usd_recuperado)
 
                 if fee_col and fee_coin_col:
                     fee_btc_mask = df_btc[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
@@ -191,16 +193,14 @@ if archivos_a_procesar:
     if len(archivos_procesados) > 0:
         st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
         
-        # Cálculos Base Consolidados
-        dca_promedio = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
+        # Cálculos Base Consolidados 100% en USD
+        current_btc_price_usd = current_btc_price * precio_venta_usdt
+        
+        dca_promedio = total_usd_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
         patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros - (comisiones_btc_spot + comisiones_btc_futuros)
         
-        valor_actual_usdt = patrimonio_total_btc * current_btc_price
-        valor_actual_usd_real = valor_actual_usdt * precio_venta_usdt
-        
-        # Mantenemos 'valor_actual_usd' igual al USDT para no romper las métricas de rentabilidad subyacentes
-        valor_actual_usd = valor_actual_usdt
-        ganancia_neta_usd = valor_actual_usd - total_usdt_neto_invertido
+        valor_actual_usd = patrimonio_total_btc * current_btc_price_usd
+        ganancia_neta_usd = valor_actual_usd - total_usd_neto_invertido
 
         hoy = pd.Timestamp.now()
         dias_efectivos = 1.0
@@ -210,10 +210,10 @@ if archivos_a_procesar:
             dias_transcurridos = (hoy - primera_fecha).days
             dias_efectivos = max(dias_transcurridos, 1.0)
 
-        rentabilidad_total_pct = (valor_actual_usd / total_usdt_neto_invertido - 1) * 100 if total_usdt_neto_invertido > 0 else 0
+        rentabilidad_total_pct = (valor_actual_usd / total_usd_neto_invertido - 1) * 100 if total_usd_neto_invertido > 0 else 0
         
-        if total_usdt_neto_invertido > 0 and valor_actual_usd > 0:
-            tasa_diaria = (valor_actual_usd / total_usdt_neto_invertido) ** (1 / dias_efectivos) - 1
+        if total_usd_neto_invertido > 0 and valor_actual_usd > 0:
+            tasa_diaria = (valor_actual_usd / total_usd_neto_invertido) ** (1 / dias_efectivos) - 1
             cagr_ponderado = ((1 + tasa_diaria) ** 365.25 - 1) * 100
         else:
             cagr_ponderado = 0.0
@@ -226,30 +226,29 @@ if archivos_a_procesar:
         
         # --- 1. SPOT & DCA ---
         st.subheader("🟢 Portafolio Spot (DCA)")
-        valor_spot_usdt = total_btc_neto_spot * current_btc_price
+        valor_spot_usd = total_btc_neto_spot * current_btc_price_usd
         s1, s2, s3, s4 = st.columns(4)
-        s1.metric("USDT Invertido", f"${total_usdt_neto_invertido:,.2f}")
+        s1.metric("USD Invertido (Real)", f"${total_usd_neto_invertido:,.2f}")
         s2.metric("Cantidad de BTC", f"₿ {total_btc_neto_spot:,.6f}")
-        s3.metric("Valorización Spot (USDT)", f"${valor_spot_usdt:,.2f}")
-        s4.metric("Precio DCA Promedio", f"${dca_promedio:,.2f}")
+        s3.metric("Valorización Spot (USD)", f"${valor_spot_usd:,.2f}")
+        s4.metric("Precio DCA Promedio (USD)", f"${dca_promedio:,.2f}")
 
         # --- 2. FUTUROS ---
         st.subheader("⚡ Rendimientos en Futuros (M-Moneda)")
-        valor_futuros_usdt = total_btc_ganados_futuros * current_btc_price
+        valor_futuros_usd = total_btc_ganados_futuros * current_btc_price_usd
         f1, f2 = st.columns(2)
         f1.metric("BTC Ganados", f"₿ {total_btc_ganados_futuros:,.6f}")
-        f2.metric("Valorización Futuros (USDT)", f"${valor_futuros_usdt:,.2f}")
+        f2.metric("Valorización Futuros (USD)", f"${valor_futuros_usd:,.2f}")
 
-        # --- 3. TOTALES (USDT Y DÓLAR AMERICANO) ---
+        # --- 3. TOTALES (DÓLAR AMERICANO) ---
         st.subheader("🔒 Patrimonio Total Consolidado")
-        t1, t2, t3 = st.columns(3)
+        t1, t2 = st.columns(2)
         t1.metric("Total BTC (Neto de fees)", f"₿ {patrimonio_total_btc:,.6f}")
-        t2.metric("Valorización Total en USDT", f"₮ {valor_actual_usdt:,.2f}")
-        t3.metric("Valorización Total en USD", f"$ {valor_actual_usd_real:,.2f}", help="Calculado usando la cotización fijada de USDT a USD (x 1.04).")
+        t2.metric("Valorización Total en USD", f"$ {valor_actual_usd:,.2f}")
 
         # --- SECCIONES ORIGINALES DE RENDIMIENTO ---
         st.markdown("---")
-        st.subheader("📈 Rendimiento Global")
+        st.subheader("📈 Rendimiento Global (en USD)")
         m4, m5, m6 = st.columns(3)
         m4.metric("Ganancia Neta Total", f"${ganancia_neta_usd:,.2f}", f"{rentabilidad_total_pct:,.1f}%")
         m5.metric("Rentabilidad Anualizada Ponderada", f"{cagr_ponderado:,.1f}% anual")
@@ -276,9 +275,9 @@ if archivos_a_procesar:
 
         st.markdown("---")
         st.header("🎯 Simulador de Toma de Ganancias (Objetivo de Ciclo)")
-        precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=10000, max_value=300000, value=180000, step=5000)
+        precio_objetivo = st.slider("¿A qué precio planeas vender? (Cotización USD Reales)", min_value=10000, max_value=300000, value=180000, step=5000)
         valor_futuro_usd = patrimonio_total_btc * precio_objetivo
-        ganancia_futura_usd = valor_futuro_usd - total_usdt_neto_invertido
+        ganancia_futura_usd = valor_futuro_usd - total_usd_neto_invertido
 
         c1, c2 = st.columns(2)
         c1.info(f"**Valor del Portafolio a ${precio_objetivo:,}:** \n\n ### ${valor_futuro_usd:,.2f}")
@@ -289,9 +288,10 @@ if archivos_a_procesar:
 # --- CALCULADORA DE MARGEN ---
 st.markdown("---")
 st.header("🛡️ Calculadora de Margen de Seguridad (M-Moneda)")
+st.caption("Nota: Los valores en esta sección se asumen en la cotización base del exchange (USDT) para coincidir de forma exacta con los precios de liquidación en pantalla.")
 c3, c4 = st.columns(2)
 with c3:
-    precio_entrada = st.number_input("Precio de Entrada del Long (USD)", value=int(current_btc_price) if current_btc_price else 60000, step=100)
+    precio_entrada = st.number_input("Precio de Entrada del Long (Cotización Exchange)", value=int(current_btc_price) if current_btc_price else 60000, step=100)
     tamano_posicion_usd = st.number_input("Tamaño de la Posición (Valor del contrato en USD)", value=1000, step=100)
 with c4:
     apalancamiento = st.number_input("Apalancamiento (x)", value=10, min_value=1, step=1)
