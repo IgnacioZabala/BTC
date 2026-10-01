@@ -66,7 +66,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("💵 Conversión a USD")
 # Conversión fijada en 1.04
 precio_venta_usdt = 1.04
-st.sidebar.info(f"Cotización fijada (1 USDT = **{precio_venta_usdt}** USD billete). \n\n*Todos los montos del dashboard están calculados en USD reales.*")
+st.sidebar.info(f"Cotización fijada (1 USDT = **{precio_venta_usdt}** USD billete). \n\n*Los balances están en USD reales, pero tu Precio DCA se muestra en USDT para el exchange.*")
 
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -114,6 +114,7 @@ if not archivos_a_procesar:
 if archivos_a_procesar:
     total_btc_neto_spot = 0.0
     total_usd_neto_invertido = 0.0
+    total_usdt_neto_invertido = 0.0 # Se mantiene el tracking en USDT solo para calcular el DCA
     total_btc_ganados_futuros = 0.0
     comisiones_btc_spot = 0.0
     comisiones_btc_futuros = 0.0
@@ -154,18 +155,23 @@ if archivos_a_procesar:
                 df_btc[amount_col] = pd.to_numeric(df_btc[amount_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
                 df_btc[price_col] = pd.to_numeric(df_btc[price_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
                 
-                # CÁLCULO DIRECTO EN USD REAL (Precio en USDT del exchange * 1.04)
-                df_btc['Valor_USD_Real'] = df_btc[amount_col] * df_btc[price_col] * precio_venta_usdt
+                # CÁLCULOS DUALES (USDT para el exchange / USD Real para el patrimonio)
+                df_btc['Valor_USDT'] = df_btc[amount_col] * df_btc[price_col]
+                df_btc['Valor_USD_Real'] = df_btc['Valor_USDT'] * precio_venta_usdt
                 
                 is_buy = df_btc[side_col].astype(str).str.contains("Buy|Compra|buy", case=False, na=False)
                 is_sell = df_btc[side_col].astype(str).str.contains("Sell|Venta|sell", case=False, na=False)
                 
                 btc_comprado = df_btc.loc[is_buy, amount_col].sum()
+                usdt_invertido = df_btc.loc[is_buy, 'Valor_USDT'].sum()
                 usd_invertido = df_btc.loc[is_buy, 'Valor_USD_Real'].sum()
+                
                 btc_vendido = df_btc.loc[is_sell, amount_col].sum()
+                usdt_recuperado = df_btc.loc[is_sell, 'Valor_USDT'].sum()
                 usd_recuperado = df_btc.loc[is_sell, 'Valor_USD_Real'].sum()
                 
                 total_btc_neto_spot += (btc_comprado - btc_vendido)
+                total_usdt_neto_invertido += (usdt_invertido - usdt_recuperado)
                 total_usd_neto_invertido += (usd_invertido - usd_recuperado)
 
                 if fee_col and fee_coin_col:
@@ -193,10 +199,10 @@ if archivos_a_procesar:
     if len(archivos_procesados) > 0:
         st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
         
-        # Cálculos Base Consolidados 100% en USD
+        # Cálculos Base Consolidados 100% en USD, excepto el DCA promedio que va en USDT
         current_btc_price_usd = current_btc_price * precio_venta_usdt
         
-        dca_promedio = total_usd_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
+        dca_promedio_usdt = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
         patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros - (comisiones_btc_spot + comisiones_btc_futuros)
         
         valor_actual_usd = patrimonio_total_btc * current_btc_price_usd
@@ -231,7 +237,7 @@ if archivos_a_procesar:
         s1.metric("USD Invertido (Real)", f"${total_usd_neto_invertido:,.2f}")
         s2.metric("Cantidad de BTC", f"₿ {total_btc_neto_spot:,.6f}")
         s3.metric("Valorización Spot (USD)", f"${valor_spot_usd:,.2f}")
-        s4.metric("Precio DCA Promedio (USD)", f"${dca_promedio:,.2f}")
+        s4.metric("Precio DCA Promedio (USDT)", f"₮ {dca_promedio_usdt:,.2f}", help="Valor exacto en el exchange (USDT) para que sepas cuándo comprar y promediar a la baja.")
 
         # --- 2. FUTUROS ---
         st.subheader("⚡ Rendimientos en Futuros (M-Moneda)")
