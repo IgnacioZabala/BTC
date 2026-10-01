@@ -39,7 +39,6 @@ def obtener_url_descarga_drive(url):
     """Convierte un link de visualización de Drive en un link de descarga directa para Pandas."""
     if not url:
         return None
-    # Busca el ID del archivo en el formato estándar de Drive
     match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
     if match:
         file_id = match.group(1)
@@ -55,14 +54,23 @@ precio_api, fuente_precio = get_live_btc_price()
 
 # --- CONFIGURACIÓN DE GOOGLE DRIVE ---
 st.sidebar.header("🔗 Conexión a Google Drive")
-st.sidebar.markdown("Pega aquí los enlaces compartidos de tus archivos CSV. (Asegúrate de que el acceso sea público/cualquiera con el enlace).")
+st.sidebar.markdown("Pega aquí los enlaces compartidos de tus archivos CSV.")
 
-# Puedes reemplazar el string vacío con tus enlaces fijos si no quieres ingresarlos cada vez
 URL_DEFECTO_SPOT = "https://drive.google.com/file/d/1fdaxnayNzqE9XNBMfO1K6JDvcfowizzq/view?usp=drive_link" 
 URL_DEFECTO_FUTUROS = "https://drive.google.com/file/d/1rgbrxHV40-Q5_ic3C1umWKfIanT2VTSA/view?usp=sharing"
 
 link_spot = st.sidebar.text_input("Enlace CSV Spot", URL_DEFECTO_SPOT)
 link_futuros = st.sidebar.text_input("Enlace CSV Futuros", URL_DEFECTO_FUTUROS)
+
+st.sidebar.markdown("---")
+st.sidebar.header("💵 Conversión a USD")
+precio_venta_usdt = st.sidebar.number_input(
+    "Cotización de venta USDT a USD", 
+    value=1.000, 
+    step=0.005, 
+    format="%.3f",
+    help="A cuánto te toman cada USDT cuando liquidas a dólares americanos billete (ej. 0.99 si tienes 1% de comisión)."
+)
 
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -89,8 +97,6 @@ with col2:
 
     st.caption(f"🟢 Sincronizado vía **{fuente_precio}** (API: ${precio_api:,.2f})")
 
-# CARGA DE ARCHIVOS
-# Usaremos una lista de tuplas con formato: (ruta_o_url, nombre_simulado_para_logica)
 archivos_a_procesar = []
 
 if link_spot:
@@ -101,7 +107,6 @@ if link_futuros:
     url_directa = obtener_url_descarga_drive(link_futuros)
     archivos_a_procesar.append((url_directa, "coin_m_drive.csv"))
 
-# Opcional: Fallback a archivos locales si no se configuraron URLs en Drive
 if not archivos_a_procesar:
     archivos_por_defecto = ["Spot_Account.csv", "Coin_M_Perpetual_Futures.csv"]
     archivos_encontrados = [f for f in archivos_por_defecto if os.path.exists(f)]
@@ -121,7 +126,6 @@ if archivos_a_procesar:
 
     for source, nombre_archivo in archivos_a_procesar:
         try:
-            # Pandas soporta leer directamente desde una URL http/https
             df = pd.read_csv(source)
         except Exception as e:
             st.error(f"Error al cargar {nombre_archivo}: {e}")
@@ -191,9 +195,15 @@ if archivos_a_procesar:
     if len(archivos_procesados) > 0:
         st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
         
+        # Cálculos Base Consolidados
         dca_promedio = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
         patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros - (comisiones_btc_spot + comisiones_btc_futuros)
-        valor_actual_usd = patrimonio_total_btc * current_btc_price
+        
+        valor_actual_usdt = patrimonio_total_btc * current_btc_price
+        valor_actual_usd_real = valor_actual_usdt * precio_venta_usdt
+        
+        # Mantenemos 'valor_actual_usd' igual al USDT para no romper las métricas de rentabilidad subyacentes
+        valor_actual_usd = valor_actual_usdt
         ganancia_neta_usd = valor_actual_usd - total_usdt_neto_invertido
 
         hoy = pd.Timestamp.now()
@@ -218,25 +228,41 @@ if archivos_a_procesar:
         st.markdown("---")
         st.header("💡 Resultados y Desglose de Activos")
         
-        b1, b2, b3 = st.columns(3)
-        b1.metric("🟢 BTC Netos (Spot / DCA)", f"₿ {total_btc_neto_spot:,.6f}")
-        b2.metric("⚡ BTC Ganados (Futuros M-Moneda)", f"₿ {total_btc_ganados_futuros:,.6f}")
-        b3.metric("🔒 Patrimonio Total en BTC", f"₿ {patrimonio_total_btc:,.6f}")
-
-        st.markdown("---")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total USDT Invertido (Neto)", f"${total_usdt_neto_invertido:,.2f}")
-        m2.metric("Precio Promedio DCA", f"${dca_promedio:,.2f}")
-        m3.metric("Valorización Actual (USD)", f"${valor_actual_usd:,.2f}")
+        # --- NUEVA ESTRUCTURA SOLICITADA ---
         
+        # 1. SPOT & DCA
+        st.subheader("🟢 Portafolio Spot (DCA)")
+        valor_spot_usdt = total_btc_neto_spot * current_btc_price
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("USDT Invertido", f"${total_usdt_neto_invertido:,.2f}")
+        s2.metric("Cantidad de BTC", f"₿ {total_btc_neto_spot:,.6f}")
+        s3.metric("Valorización Spot (USDT)", f"${valor_spot_usdt:,.2f}")
+        s4.metric("Precio DCA Promedio", f"${dca_promedio:,.2f}")
+
+        # 2. FUTUROS
+        st.subheader("⚡ Rendimientos en Futuros (M-Moneda)")
+        valor_futuros_usdt = total_btc_ganados_futuros * current_btc_price
+        f1, f2 = st.columns(2)
+        f1.metric("BTC Ganados", f"₿ {total_btc_ganados_futuros:,.6f}")
+        f2.metric("Valorización Futuros (USDT)", f"${valor_futuros_usdt:,.2f}")
+
+        # 3. TOTALES (USDT Y DÓLAR AMERICANO)
+        st.subheader("🔒 Patrimonio Total Consolidado")
+        t1, t2, t3 = st.columns(3)
+        t1.metric("Total BTC (Neto de fees)", f"₿ {patrimonio_total_btc:,.6f}")
+        t2.metric("Valorización Total en USDT", f"₮ {valor_actual_usdt:,.2f}")
+        t3.metric("Valorización Total en USD", f"$ {valor_actual_usd_real:,.2f}", help="Calculado usando la cotización USDT a USD ingresada en el panel lateral.")
+
+        # --- SECCIONES ORIGINALES DE RENDIMIENTO ---
         st.markdown("---")
+        st.subheader("📈 Rendimiento Global")
         m4, m5, m6 = st.columns(3)
         m4.metric("Ganancia Neta Total", f"${ganancia_neta_usd:,.2f}", f"{rentabilidad_total_pct:,.1f}%")
         m5.metric("Rentabilidad Anualizada Ponderada", f"{cagr_ponderado:,.1f}% anual")
         m6.metric("Ventana de Operativa Real", f"{dias_efectivos:.0f} días")
 
         st.markdown("---")
-        st.header("⏱️ Rendimiento Promedio Ponderado por Período")
+        st.header("⏱️️ Rendimiento Promedio Ponderado por Período")
         mp1, mp2 = st.columns(2)
         mp1.metric("💵 Ganancia Diaria Promedio (USD)", f"${ganancia_diaria_usd:,.2f} / día")
         mp2.metric("📅 Ganancia Cada 30 Días Promedio (USD)", f"${ganancia_mensual_usd:,.2f} / mes")
@@ -271,7 +297,7 @@ st.markdown("---")
 st.header("🛡️ Calculadora de Margen de Seguridad (M-Moneda)")
 c3, c4 = st.columns(2)
 with c3:
-    precio_entrada = st.number_input("Precio de Entrada del Long (USD)", value=int(current_btc_price), step=100)
+    precio_entrada = st.number_input("Precio de Entrada del Long (USD)", value=int(current_btc_price) if current_btc_price else 60000, step=100)
     tamano_posicion_usd = st.number_input("Tamaño de la Posición (Valor del contrato en USD)", value=1000, step=100)
 with c4:
     apalancamiento = st.number_input("Apalancamiento (x)", value=10, min_value=1, step=1)
