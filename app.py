@@ -31,20 +31,34 @@ def get_live_btc_price():
 
 @st.cache_data(ttl=3600)
 def get_bitcoin_2yr_ma():
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    # 1. Intentar con CoinGecko (pedimos 730 días diarios)
     try:
-        # Pedimos los últimos 730 días de precios diarios a CoinGecko
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=730&interval=daily"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        
-        if "prices" in data:
-            precios = [item[1] for item in data["prices"]]
-            if len(precios) > 0:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if "prices" in data and len(data["prices"]) > 0:
+                precios = [item[1] for item in data["prices"]]
                 ma_2yr = sum(precios) / len(precios)
-                multiplo_5x = ma_2yr * 5
-                return ma_2yr, multiplo_5x
+                return ma_2yr, ma_2yr * 5
     except Exception:
         pass
+
+    # 2. Respaldo (Fallback) con Binance Kline/Candles si CoinGecko falla
+    try:
+        url_binance = "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=730"
+        response = requests.get(url_binance, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            precios = [float(item[4]) for item in data]
+            if len(precios) > 0:
+                ma_2yr = sum(precios) / len(precios)
+                return ma_2yr, ma_2yr * 5
+    except Exception:
+        pass
+
     return None, None
 
 def encontrar_columna(df, palabras_clave):
