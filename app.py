@@ -29,6 +29,24 @@ def get_live_btc_price():
 
     return 83408.0, "Manual / Sin conexión"
 
+@st.cache_data(ttl=3600)
+def get_bitcoin_2yr_ma():
+    try:
+        # Pedimos los últimos 730 días de precios diarios a CoinGecko
+        url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=730&interval=daily"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        
+        if "prices" in data:
+            precios = [item[1] for item in data["prices"]]
+            if len(precios) > 0:
+                ma_2yr = sum(precios) / len(precios)
+                multiplo_5x = ma_2yr * 5
+                return ma_2yr, multiplo_5x
+    except Exception:
+        pass
+    return None, None
+
 def encontrar_columna(df, palabras_clave):
     for col in df.columns:
         if any(palabra in str(col).lower() for palabra in palabras_clave):
@@ -64,7 +82,6 @@ link_futuros = st.sidebar.text_input("Enlace CSV Futuros", URL_DEFECTO_FUTUROS)
 
 st.sidebar.markdown("---")
 st.sidebar.header("💵 Conversión a USD")
-# Conversión fijada en 1.04
 precio_venta_usdt = 1.04
 st.sidebar.info(f"Cotización fijada (1 USDT = **{precio_venta_usdt}** USD billete). \n\n*Los balances están en USD reales, pero tu Precio DCA se muestra en USDT para el exchange.*")
 
@@ -114,7 +131,7 @@ if not archivos_a_procesar:
 if archivos_a_procesar:
     total_btc_neto_spot = 0.0
     total_usd_neto_invertido = 0.0
-    total_usdt_neto_invertido = 0.0 # Se mantiene el tracking en USDT solo para calcular el DCA
+    total_usdt_neto_invertido = 0.0 
     total_btc_ganados_futuros = 0.0
     comisiones_btc_spot = 0.0
     comisiones_btc_futuros = 0.0
@@ -155,7 +172,6 @@ if archivos_a_procesar:
                 df_btc[amount_col] = pd.to_numeric(df_btc[amount_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
                 df_btc[price_col] = pd.to_numeric(df_btc[price_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
                 
-                # CÁLCULOS DUALES (USDT para el exchange / USD Real para el patrimonio)
                 df_btc['Valor_USDT'] = df_btc[amount_col] * df_btc[price_col]
                 df_btc['Valor_USD_Real'] = df_btc['Valor_USDT'] * precio_venta_usdt
                 
@@ -199,7 +215,6 @@ if archivos_a_procesar:
     if len(archivos_procesados) > 0:
         st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
         
-        # Cálculos Base Consolidados 100% en USD, excepto el DCA promedio que va en USDT
         current_btc_price_usd = current_btc_price * precio_venta_usdt
         
         dca_promedio_usdt = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
@@ -227,6 +242,26 @@ if archivos_a_procesar:
         ganancia_diaria_usd = ganancia_neta_usd / dias_efectivos if dias_efectivos > 0 else 0.0
         ganancia_mensual_usd = ganancia_diaria_usd * 30.0
 
+        # --- SECCIÓN: BITCOIN INVESTOR TOOL (2-Year MA & 5x Multiplier) ---
+        st.markdown("---")
+        st.header("📐 Bitcoin Investor Tool (2-Year MA Multiplier)")
+        
+        ma_2yr, multiplo_5x = get_bitcoin_2yr_ma()
+        
+        if ma_2yr and multiplo_5x:
+            it1, it2, it3 = st.columns(3)
+            it1.metric("Media Móvil 2 Años (730d)", f"${ma_2yr:,.2f}", help="Suelo histórico / Zona de acumulación DCA ideal cuando el precio cae por debajo.")
+            it2.metric("Techo 5x Multiplicador", f"${multiplo_5x:,.2f}", help="Zona histórica de euforia y toma de ganancias.")
+            
+            if current_btc_price_usd < ma_2yr:
+                it3.success("🟢 **Estado:** Por debajo de la MA 2Y (Zona de Acumulación / DCA Fuerte)")
+            elif current_btc_price_usd > multiplo_5x:
+                it3.error("🔴 **Estado:** Por encima del Múltiplo 5x (Zona de Riesgo / Toma de Ganancias)")
+            else:
+                it3.info("🟡 **Estado:** En rango neutral entre la Base y el Techo del Ciclo")
+        else:
+            st.warning("⚠️ No se pudo calcular la Media Móvil de 2 años en este momento (error de API).")
+
         st.markdown("---")
         st.header("💡 Resultados y Desglose de Activos")
         
@@ -250,7 +285,7 @@ if archivos_a_procesar:
         st.subheader("🔒 Patrimonio Total Consolidado")
         t1, t2 = st.columns(2)
         t1.metric("Total BTC (Neto de fees)", f"₿ {patrimonio_total_btc:,.6f}")
-        t2.metric("Valorización Total en USD", f"$ {valor_actual_usd:,.2f}")
+        t2.metric("Valorización Total in USD", f"$ {valor_actual_usd:,.2f}")
 
         # --- SECCIONES ORIGINALES DE RENDIMIENTO ---
         st.markdown("---")
