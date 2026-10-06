@@ -32,8 +32,6 @@ def get_live_btc_price():
 @st.cache_data(ttl=3600)
 def get_bitcoin_2yr_ma():
     headers = {"User-Agent": "Mozilla/5.0"}
-    
-    # 1. Intentar con CoinGecko (pedimos 730 días diarios)
     try:
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=730&interval=daily"
         response = requests.get(url, headers=headers, timeout=5)
@@ -46,7 +44,6 @@ def get_bitcoin_2yr_ma():
     except Exception:
         pass
 
-    # 2. Respaldo (Fallback) con Binance Kline/Candles si CoinGecko falla
     try:
         url_binance = "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=730"
         response = requests.get(url_binance, headers=headers, timeout=5)
@@ -68,7 +65,6 @@ def encontrar_columna(df, palabras_clave):
     return None
 
 def obtener_url_descarga_drive(url):
-    """Convierte un link de visualización de Drive en un link de descarga directa para Pandas."""
     if not url:
         return None
     match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
@@ -97,11 +93,11 @@ link_futuros = st.sidebar.text_input("Enlace CSV Futuros", URL_DEFECTO_FUTUROS)
 st.sidebar.markdown("---")
 st.sidebar.header("💵 Conversión a USD")
 precio_venta_usdt = 1.04
-st.sidebar.info(f"Cotización fijada (1 USDT = **{precio_venta_usdt}** USD billete). \n\n*Los balances están en USD reales, pero tu Precio DCA se muestra en USDT para el exchange.*")
+st.sidebar.info(f"Cotización fijada (1 USDT = **{precio_venta_usdt}** USD billete).")
 
 col1, col2 = st.columns([2, 1])
 with col1:
-    st.info("🔄 Los datos se sincronizarán automáticamente desde Google Drive si los enlaces están configurados en el panel lateral.")
+    st.info("🔄 Los datos se sincronizan automáticamente desde Google Drive.")
 with col2:
     sub_c1, sub_c2 = st.columns([3, 1])
     with sub_c1:
@@ -117,7 +113,7 @@ with col2:
     with sub_c2:
         st.write("") 
         st.write("") 
-        if st.button("🔄", help="Forzar actualización de precio desde la API"):
+        if st.button("🔄", help="Forzar actualización de precio"):
             get_live_btc_price.clear()
             st.session_state.precio_manual = None
             st.rerun()
@@ -140,7 +136,6 @@ if not archivos_a_procesar:
     if archivos_encontrados:
         for f in archivos_encontrados:
             archivos_a_procesar.append((f, f.lower()))
-        st.caption(f"📁 Leyendo reportes locales: {', '.join(archivos_encontrados)}")
 
 if archivos_a_procesar:
     total_btc_neto_spot = 0.0
@@ -232,6 +227,8 @@ if archivos_a_procesar:
         current_btc_price_usd = current_btc_price * precio_venta_usdt
         
         dca_promedio_usdt = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
+        
+        # Consolidado total exacto en cartera (Spot + Ganancias de Futuros - Fees)
         patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros - (comisiones_btc_spot + comisiones_btc_futuros)
         
         valor_actual_usd = patrimonio_total_btc * current_btc_price_usd
@@ -264,56 +261,57 @@ if archivos_a_procesar:
         
         if ma_2yr and multiplo_5x:
             it1, it2, it3 = st.columns(3)
-            it1.metric("Media Móvil 2 Años (730d)", f"${ma_2yr:,.2f}", help="Suelo histórico / Zona de acumulación DCA ideal cuando el precio cae por debajo.")
-            it2.metric("Techo 5x Multiplicador", f"${multiplo_5x:,.2f}", help="Zona histórica de euforia y toma de ganancias.")
+            it1.metric("Media Móvil 2 Años (730d)", f"${ma_2yr:,.2f}")
+            it2.metric("Techo 5x Multiplicador", f"${multiplo_5x:,.2f}")
             
             if current_btc_price_usd < ma_2yr:
-                it3.success("🟢 **Estado:** Por debajo de la MA 2Y (Zona de Acumulación / DCA Fuerte)")
+                it3.success("🟢 **Estado:** Por debajo de la MA 2Y (Zona de Acumulación)")
             elif current_btc_price_usd > multiplo_5x:
-                it3.error("🔴 **Estado:** Por encima del Múltiplo 5x (Zona de Riesgo / Toma de Ganancias)")
+                it3.error("🔴 **Estado:** Por encima del Múltiplo 5x (Zona de Riesgo)")
             else:
-                it3.info("🟡 **Estado:** En rango neutral entre la Base y el Techo del Ciclo")
+                it3.info("🟡 **Estado:** En rango neutral")
         else:
-            st.warning("⚠️ No se pudo calcular la Media Móvil de 2 años en este momento (error de API).")
+            st.warning("⚠️ No se pudo calcular la Media Móvil de 2 años.")
 
         st.markdown("---")
-        st.header("💡 Resultados y Desglose de Activos")
+        st.header("💡 Resultados y Desglose de Cartera")
         
         # --- 1. SPOT & DCA ---
-        st.subheader("🟢 Portafolio Spot (DCA)")
+        st.subheader("🟢 Portafolio Spot (Comprados)")
         valor_spot_usd = total_btc_neto_spot * current_btc_price_usd
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("USD Invertido (Real)", f"${total_usd_neto_invertido:,.2f}")
-        s2.metric("Cantidad de BTC", f"₿ {total_btc_neto_spot:,.6f}")
+        s2.metric("Cantidad de BTC Comprados", f"₿ {total_btc_neto_spot:,.6f}")
         s3.metric("Valorización Spot (USD)", f"${valor_spot_usd:,.2f}")
-        s4.metric("Precio DCA Promedio (USDT)", f"₮ {dca_promedio_usdt:,.2f}", help="Valor exacto en el exchange (USDT) para que sepas cuándo comprar y promediar a la baja.")
+        s4.metric("Precio DCA Promedio", f"₮ {dca_promedio_usdt:,.2f}")
 
         # --- 2. FUTUROS ---
         st.subheader("⚡ Rendimientos en Futuros (M-Moneda)")
         valor_futuros_usd = total_btc_ganados_futuros * current_btc_price_usd
         f1, f2 = st.columns(2)
-        f1.metric("BTC Ganados", f"₿ {total_btc_ganados_futuros:,.6f}")
+        f1.metric("BTC Ganados en Futuros", f"₿ {total_btc_ganados_futuros:,.6f}")
         f2.metric("Valorización Futuros (USD)", f"${valor_futuros_usd:,.2f}")
 
-        # --- 3. TOTALES (DÓLAR AMERICANO) ---
-        st.subheader("🔒 Patrimonio Total Consolidado")
+        # --- 3. PATRIMONIO TOTAL CONSOLIDADO (COMO LA APP) ---
+        st.markdown("---")
+        st.header("🔒 Patrimonio Total Consolidado en Cartera")
         t1, t2 = st.columns(2)
-        t1.metric("Total BTC (Neto de fees)", f"₿ {patrimonio_total_btc:,.6f}")
+        t1.metric("Total BTC en Cartera (Spot + Futuros)", f"₿ {patrimonio_total_btc:,.6f}")
         t2.metric("Valorización Total in USD", f"$ {valor_actual_usd:,.2f}")
 
-        # --- SECCIONES ORIGINALES DE RENDIMIENTO ---
+        # --- RENDIMIENTO GLOBAL ---
         st.markdown("---")
         st.subheader("📈 Rendimiento Global (en USD)")
         m4, m5, m6 = st.columns(3)
         m4.metric("Ganancia Neta Total", f"${ganancia_neta_usd:,.2f}", f"{rentabilidad_total_pct:,.1f}%")
-        m5.metric("Rentabilidad Anualizada Ponderada", f"{cagr_ponderado:,.1f}% anual")
+        m5.metric("Rentabilidad Anualizada", f"{cagr_ponderado:,.1f}% anual")
         m6.metric("Ventana de Operativa Real", f"{dias_efectivos:.0f} días")
 
         st.markdown("---")
-        st.header("⏱ Rendimiento Promedio Ponderado por Período")
+        st.header("⏱ Rendimiento Promedio por Período")
         mp1, mp2 = st.columns(2)
-        mp1.metric("💵 Ganancia Diaria Promedio (USD)", f"${ganancia_diaria_usd:,.2f} / día")
-        mp2.metric("📅 Ganancia Cada 30 Días Promedio (USD)", f"${ganancia_mensual_usd:,.2f} / mes")
+        mp1.metric("💵 Ganancia Diaria Promedio", f"${ganancia_diaria_usd:,.2f} / día")
+        mp2.metric("📅 Ganancia Cada 30 Días", f"${ganancia_mensual_usd:,.2f} / mes")
 
         st.markdown("---")
         st.header("📊 Proyección Futura (Ritmo Compuesto)")
@@ -330,7 +328,7 @@ if archivos_a_procesar:
 
         st.markdown("---")
         st.header("🎯 Simulador de Toma de Ganancias (Objetivo de Ciclo)")
-        precio_objetivo = st.slider("¿A qué precio planeas vender? (Cotización USD Reales)", min_value=10000, max_value=300000, value=180000, step=5000)
+        precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=10000, max_value=300000, value=180000, step=5000)
         valor_futuro_usd = patrimonio_total_btc * precio_objetivo
         ganancia_futura_usd = valor_futuro_usd - total_usd_neto_invertido
 
@@ -343,11 +341,10 @@ if archivos_a_procesar:
 # --- CALCULADORA DE MARGEN ---
 st.markdown("---")
 st.header("🛡️ Calculadora de Margen de Seguridad (M-Moneda)")
-st.caption("Nota: Los valores en esta sección se asumen en la cotización base del exchange (USDT) para coincidir de forma exacta con los precios de liquidación en pantalla.")
 c3, c4 = st.columns(2)
 with c3:
-    precio_entrada = st.number_input("Precio de Entrada del Long (Cotización Exchange)", value=int(current_btc_price) if current_btc_price else 60000, step=100)
-    tamano_posicion_usd = st.number_input("Tamaño de la Posición (Valor del contrato en USD)", value=1000, step=100)
+    precio_entrada = st.number_input("Precio de Entrada del Long", value=int(current_btc_price) if current_btc_price else 60000, step=100)
+    tamano_posicion_usd = st.number_input("Tamaño de la Posición (USD)", value=1000, step=100)
 with c4:
     apalancamiento = st.number_input("Apalancamiento (x)", value=10, min_value=1, step=1)
     caida_protegida = st.slider("Protección de Caída Deseada (%)", min_value=10, max_value=80, value=30, step=1) / 100.0
@@ -358,8 +355,9 @@ if precio_entrada > 0:
     perdida_btc_en_caida = tamano_posicion_usd * ((1 / precio_liquidacion_objetivo) - (1 / precio_entrada))
     margen_extra_necesario = perdida_btc_en_caida - margen_inicial_btc
 
-    st.write(f"- 📉 **Precio de Liquidación que buscas (-{caida_protegida*100}%):** ${precio_liquidacion_objetivo:,.2f}")
+    st.write(f"- 📉 **Precio de Liquidación (-{caida_protegida*100}%):** ${precio_liquidacion_objetivo:,.2f}")
     if margen_extra_necesario > 0:
         st.success(f"➕ **MARGEN EXTRA A AGREGAR MANUALMENTE:** ₿ {margen_extra_necesario:,.6f}")
     else:
         st.success("✅ Tu margen inicial ya cubre esta caída.")
+
