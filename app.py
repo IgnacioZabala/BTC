@@ -288,9 +288,17 @@ if archivos_a_procesar:
         # --- 2. FUTUROS ---
         st.subheader("⚡ Rendimientos en Futuros (M-Moneda)")
         valor_futuros_usd = total_btc_ganados_futuros * current_btc_price_usd
-        f1, f2 = st.columns(2)
+        
+        # --- Nuevos cálculos: BTC diarios y anualizados ---
+        btc_futuros_por_dia = total_btc_ganados_futuros / dias_efectivos if dias_efectivos > 0 else 0.0
+        btc_futuros_anual = btc_futuros_por_dia * 365
+        
+        # Cambiamos a 4 columnas para mostrar las nuevas métricas
+        f1, f2, f3, f4 = st.columns(4)
         f1.metric("BTC Ganados en Futuros", f"₿ {total_btc_ganados_futuros:,.6f}")
         f2.metric("Valorización Futuros (USD)", f"${valor_futuros_usd:,.2f}")
+        f3.metric("BTC Ganados / Día", f"₿ {btc_futuros_por_dia:,.6f}")
+        f4.metric("Proyección a 1 Año (BTC)", f"₿ {btc_futuros_anual:,.6f}")
 
         # --- 3. PATRIMONIO TOTAL CONSOLIDADO (COMO LA APP) ---
         st.markdown("---")
