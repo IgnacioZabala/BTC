@@ -4,6 +4,7 @@ import requests
 import datetime
 import os
 import re
+import io
 
 st.set_page_config(page_title="Analizador BingX - DCA & Futuros", layout="wide")
 
@@ -84,7 +85,7 @@ precio_api, fuente_precio = get_live_btc_price()
 st.sidebar.header("🔗 Conexión a Google Drive")
 st.sidebar.markdown("Pega aquí los enlaces compartidos de tus archivos CSV.")
 
-URL_DEFECTO_SPOT = "https://drive.google.com/file/d/1fdaxnayNzqE9XNBMfO1K6JDvcfowizzq/view?usp=sharing" 
+URL_DEFECTO_SPOT = "https://drive.google.com/file/d/1fdaxnayNzqE9XNBMfO1K6JDvcfowizzq/view?usp=drive_link" 
 URL_DEFECTO_FUTUROS = "https://drive.google.com/file/d/1rgbrxHV40-Q5_ic3C1umWKfIanT2VTSA/view?usp=sharing"
 
 link_spot = st.sidebar.text_input("Enlace CSV Spot", URL_DEFECTO_SPOT)
@@ -114,4 +115,304 @@ with col2:
         st.write("") 
         st.write("") 
         if st.button("🔄", help="Forzar actualización de precio"):
-            get_
+            get_live_btc_price.clear()
+            st.session_state.precio_manual = None
+            st.rerun()
+
+    st.caption(f"🟢 Sincronizado vía **{fuente_precio}** (API: ₮{precio_api:,.2f})")
+
+archivos_a_procesar = []
+
+if link_spot:
+    url_directa = obtener_url_descarga_drive(link_spot)
+    archivos_a_procesar.append((url_directa, "spot_drive.csv"))
+
+if link_futuros:
+    url_directa = obtener_url_descarga_drive(link_futuros)
+    archivos_a_procesar.append((url_directa, "coin_m_drive.csv"))
+
+if not archivos_a_procesar:
+    archivos_por_defecto = ["Spot_Account.csv", "Coin_M_Perpetual_Futures.csv"]
+    archivos_encontrados = [f for f in archivos_por_defecto if os.path.exists(f)]
+    if archivos_encontrados:
+        for f in archivos_encontrados:
+            archivos_a_procesar.append((f, f.lower()))
+
+if archivos_a_procesar:
+    total_btc_neto_spot = 0.0
+    total_usd_neto_invertido = 0.0
+    total_usdt_neto_invertido = 0.0 
+    total_btc_ganados_futuros = 0.0
+    comisiones_btc_spot = 0.0
+    comisiones_btc_futuros = 0.0
+    fechas_operaciones = []
+    archivos_procesados = []
+
+    for source, nombre_archivo in archivos_a_procesar:
+        try:
+            # Petición robusta simulando navegador para evitar bloqueos de Google Drive
+            if source.startswith("http"):
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+                res = requests.get(source, headers=headers, timeout=10)
+                
+                if "<html" in res.text[:500].lower():
+                    st.error(f"⚠️ Google Drive bloqueó la descarga de {nombre_archivo}. Revisa los permisos o intenta alojarlo en GitHub.")
+                    continue
+                
+                df = pd.read_csv(io.StringIO(res.text))
+            else:
+                df = pd.read_csv(source)
+                
+        except requests.exceptions.Timeout:
+            st.error(f"⏳ Tiempo de espera agotado al descargar {nombre_archivo} de Drive.")
+            continue
+        except Exception as e:
+            st.error(f"❌ Error al cargar {nombre_archivo}: {e}")
+            continue
+        
+        if df.empty:
+            continue
+
+        time_col = encontrar_columna(df, ["time", "fecha", "date"])
+
+        if time_col:
+            df['Fecha_Clean'] = pd.to_datetime(df[time_col], errors='coerce')
+            fechas_operaciones.extend(df['Fecha_Clean'].dropna().tolist())
+
+        # --- 1. PROCESAR SPOT ---
+        if "spot" in nombre_archivo and "chain" not in nombre_archivo:
+            side_col = encontrar_columna(df, ["side", "lado", "dirección", "direction", "tipo", "type", "action", "acción"])
+            amount_col = encontrar_columna(df, ["amount", "monto", "executed", "ejecutado", "cantidad", "filled", "volume", "volumen"])
+            price_col = encontrar_columna(df, ["price", "precio", "average", "avg", "promedio"])
+            par_col = encontrar_columna(df, ["par", "symbol", "símbolo", "pair", "coin", "asset", "activo"])
+            fee_col = encontrar_columna(df, ["fee"])
+            fee_coin_col = encontrar_columna(df, ["fee coin", "feecoin"])
+
+            if amount_col and price_col and side_col and time_col:
+                if par_col:
+                    df_btc = df[df[par_col].astype(str).str.contains("BTC", case=False, na=False)].copy()
+                else:
+                    df_btc = df.copy()
+                
+                df_btc[amount_col] = pd.to_numeric(df_btc[amount_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
+                df_btc[price_col] = pd.to_numeric(df_btc[price_col].astype(str).str.replace(',', '').str.replace(' ', ''), errors='coerce').fillna(0)
+                
+                df_btc['Valor_USDT'] = df_btc[amount_col] * df_btc[price_col]
+                df_btc['Valor_USD_Real'] = df_btc['Valor_USDT'] * precio_venta_usdt
+                
+                is_buy = df_btc[side_col].astype(str).str.contains("Buy|Compra|buy", case=False, na=False)
+                is_sell = df_btc[side_col].astype(str).str.contains("Sell|Venta|sell", case=False, na=False)
+                
+                btc_comprado = df_btc.loc[is_buy, amount_col].sum()
+                usdt_invertido = df_btc.loc[is_buy, 'Valor_USDT'].sum()
+                usd_invertido = df_btc.loc[is_buy, 'Valor_USD_Real'].sum()
+                
+                btc_vendido = df_btc.loc[is_sell, amount_col].sum()
+                usdt_recuperado = df_btc.loc[is_sell, 'Valor_USDT'].sum()
+                usd_recuperado = df_btc.loc[is_sell, 'Valor_USD_Real'].sum()
+                
+                total_btc_neto_spot += (btc_comprado - btc_vendido)
+                total_usdt_neto_invertido += (usdt_invertido - usdt_recuperado)
+                total_usd_neto_invertido += (usd_invertido - usd_recuperado)
+
+                if fee_col and fee_coin_col:
+                    fee_btc_mask = df_btc[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
+                    comisiones_btc_spot += pd.to_numeric(df_btc.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
+
+                archivos_procesados.append("Spot (Google Drive)")
+
+        # --- 2. PROCESAR FUTUROS M-MONEDA ---
+        elif "coin_m" in nombre_archivo or "m_moneda" in nombre_archivo:
+            pnl_col = encontrar_columna(df, ["pnl", "ganancia", "profit", "realized", "realizado"])
+            fee_col = encontrar_columna(df, ["fee"])
+            fee_coin_col = encontrar_columna(df, ["fee coin", "feecoin"])
+
+            if pnl_col:
+                df['PnL_BTC'] = pd.to_numeric(df[pnl_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                total_btc_ganados_futuros += df['PnL_BTC'].sum()
+
+                if fee_col and fee_coin_col:
+                    fee_btc_mask = df[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
+                    comisiones_btc_futuros += pd.to_numeric(df.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
+
+                archivos_procesados.append("Futuros (Google Drive)")
+
+    if len(archivos_procesados) > 0:
+        st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
+        
+        current_btc_price_usd = current_btc_price * precio_venta_usdt
+        
+        dca_promedio_usdt = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
+        
+        # Consolidado total exacto en cartera (Spot + Ganancias de Futuros - Fees)
+        patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros - (comisiones_btc_spot + comisiones_btc_futuros)
+        
+        valor_actual_usd = patrimonio_total_btc * current_btc_price_usd
+        ganancia_neta_usd = valor_actual_usd - total_usd_neto_invertido
+
+        hoy = pd.Timestamp.now()
+        dias_efectivos = 1.0
+        
+        if fechas_operaciones:
+            primera_fecha = min(fechas_operaciones)
+            dias_transcurridos = (hoy - primera_fecha).days
+            dias_efectivos = max(dias_transcurridos, 1.0)
+
+        rentabilidad_total_pct = (valor_actual_usd / total_usd_neto_invertido - 1) * 100 if total_usd_neto_invertido > 0 else 0
+        
+        if total_usd_neto_invertido > 0 and valor_actual_usd > 0:
+            tasa_diaria = (valor_actual_usd / total_usd_neto_invertido) ** (1 / dias_efectivos) - 1
+            cagr_ponderado = ((1 + tasa_diaria) ** 365.25 - 1) * 100
+        else:
+            cagr_ponderado = 0.0
+
+        ganancia_diaria_usd = ganancia_neta_usd / dias_efectivos if dias_efectivos > 0 else 0.0
+        ganancia_mensual_usd = ganancia_diaria_usd * 30.0
+
+        # --- SECCIÓN: BITCOIN INVESTOR TOOL (2-Year MA & 5x Multiplier) ---
+        st.markdown("---")
+        st.header("📐 Bitcoin Investor Tool (2-Year MA Multiplier)")
+        
+        ma_2yr, multiplo_5x = get_bitcoin_2yr_ma()
+        
+        if ma_2yr and multiplo_5x:
+            it1, it2, it3 = st.columns(3)
+            it1.metric("Media Móvil 2 Años (730d)", f"${ma_2yr:,.2f}")
+            it2.metric("Techo 5x Multiplicador", f"${multiplo_5x:,.2f}")
+            
+            if current_btc_price_usd < ma_2yr:
+                it3.success("🟢 **Estado:** Por debajo de la MA 2Y (Zona de Acumulación)")
+            elif current_btc_price_usd > multiplo_5x:
+                it3.error("🔴 **Estado:** Por encima del Múltiplo 5x (Zona de Riesgo)")
+            else:
+                it3.info("🟡 **Estado:** En rango neutral")
+        else:
+            st.warning("⚠️ No se pudo calcular la Media Móvil de 2 años.")
+
+        st.markdown("---")
+        st.header("💡 Resultados y Desglose de Cartera")
+        
+        # --- 1. SPOT & DCA ---
+        st.subheader("🟢 Portafolio Spot (Comprados)")
+        valor_spot_usd = total_btc_neto_spot * current_btc_price_usd
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("USD Invertido (Real)", f"${total_usd_neto_invertido:,.2f}")
+        s2.metric("Cantidad de BTC Comprados", f"₿ {total_btc_neto_spot:,.6f}")
+        s3.metric("Valorización Spot (USD)", f"${valor_spot_usd:,.2f}")
+        s4.metric("Precio DCA Promedio", f"₮ {dca_promedio_usdt:,.2f}")
+
+        # --- 2. FUTUROS ---
+        st.subheader("⚡ Rendimientos en Futuros (M-Moneda)")
+        valor_futuros_usd = total_btc_ganados_futuros * current_btc_price_usd
+        
+        btc_futuros_por_dia = total_btc_ganados_futuros / dias_efectivos if dias_efectivos > 0 else 0.0
+        btc_futuros_anual = btc_futuros_por_dia * 365
+        
+        f1, f2, f3, f4 = st.columns(4)
+        f1.metric("BTC Ganados en Futuros", f"₿ {total_btc_ganados_futuros:,.6f}")
+        f2.metric("Valorización Futuros (USD)", f"${valor_futuros_usd:,.2f}")
+        f3.metric("BTC Ganados / Día", f"₿ {btc_futuros_por_dia:,.6f}")
+        f4.metric("Proyección a 1 Año (BTC)", f"₿ {btc_futuros_anual:,.6f}")
+
+        # --- 3. PATRIMONIO TOTAL CONSOLIDADO (COMO LA APP) ---
+        st.markdown("---")
+        st.header("🔒 Patrimonio Total Consolidado en Cartera")
+        t1, t2 = st.columns(2)
+        t1.metric("Total BTC en Cartera (Spot + Futuros)", f"₿ {patrimonio_total_btc:,.6f}")
+        t2.metric("Valorización Total in USD", f"$ {valor_actual_usd:,.2f}")
+
+        # --- RENDIMIENTO GLOBAL ---
+        st.markdown("---")
+        st.subheader("📈 Rendimiento Global (en USD)")
+        m4, m5, m6 = st.columns(3)
+        m4.metric("Ganancia Neta Total", f"${ganancia_neta_usd:,.2f}", f"{rentabilidad_total_pct:,.1f}%")
+        m5.metric("Rentabilidad Anualizada", f"{cagr_ponderado:,.1f}% anual")
+        m6.metric("Ventana de Operativa Real", f"{dias_efectivos:.0f} días")
+
+        st.markdown("---")
+        st.header("⏱ Rendimiento Promedio por Período")
+        mp1, mp2 = st.columns(2)
+        mp1.metric("💵 Ganancia Diaria Promedio", f"${ganancia_diaria_usd:,.2f} / día")
+        mp2.metric("📅 Ganancia Cada 30 Días", f"${ganancia_mensual_usd:,.2f} / mes")
+
+        st.markdown("---")
+        st.header("📊 Proyección Futura (Ritmo Compuesto)")
+        col_p1, col_p2, col_p3 = st.columns(3)
+        tasa_proyeccion = max(min(cagr_ponderado, 200.0), 15.0)
+        
+        val_1_ano = valor_actual_usd * (1 + (tasa_proyeccion / 100))
+        val_2_anos = val_1_ano * (1 + (tasa_proyeccion / 100))
+        val_3_anos = val_2_anos * (1 + (tasa_proyeccion / 100))
+
+        col_p1.info(f"**Proyección a 1 Año:** \n\n ### ${val_1_ano:,.2f}")
+        col_p2.info(f"**Proyección a 2 Años:** \n\n ### ${val_2_anos:,.2f}")
+        col_p3.info(f"**Proyección a 3 Años:** \n\n ### ${val_3_anos:,.2f}")
+
+        st.markdown("---")
+        st.header("🎯 Simulador de Toma de Ganancias (Objetivo de Ciclo)")
+        precio_objetivo = st.slider("¿A qué precio planeas vender? (USD)", min_value=10000, max_value=300000, value=180000, step=5000)
+        valor_futuro_usd = patrimonio_total_btc * precio_objetivo
+        ganancia_futura_usd = valor_futuro_usd - total_usd_neto_invertido
+
+        c1, c2 = st.columns(2)
+        c1.info(f"**Valor del Portafolio a ${precio_objetivo:,}:** \n\n ### ${valor_futuro_usd:,.2f}")
+        c2.success(f"**Ganancia Neta Proyectada:** \n\n ### ${ganancia_futura_usd:,.2f}")
+    else:
+        st.warning("⚠️ No se pudieron procesar los archivos.")
+
+# --- CALCULADORA DE MARGEN ---
+st.markdown("---")
+st.header("🛡️ Calculadoras de Gestión de Riesgo (M-Moneda)")
+
+tab1, tab2 = st.tabs(["1️⃣ Calcular Margen Necesario (Por Posición)", "2️⃣ Calcular Posición Máxima (Por Margen)"])
+
+with tab1:
+    st.subheader("¿Cuánto BTC necesito para proteger una posición de X USD?")
+    c3, c4 = st.columns(2)
+    with c3:
+        precio_entrada_1 = st.number_input("Precio de Entrada del Long", value=int(current_btc_price) if current_btc_price else 60000, step=100, key="pe_1")
+        tamano_posicion_usd = st.number_input("Tamaño de la Posición (USD)", value=1000, step=100, key="tp_1")
+    with c4:
+        apalancamiento_1 = st.number_input("Apalancamiento (x)", value=10, min_value=1, step=1, key="ap_1")
+        caida_protegida_1 = st.slider("Protección de Caída Deseada (%)", min_value=10, max_value=80, value=30, step=1, key="cp_1") / 100.0
+
+    if precio_entrada_1 > 0:
+        precio_liquidacion_objetivo_1 = precio_entrada_1 * (1 - caida_protegida_1)
+        margen_inicial_btc_1 = (tamano_posicion_usd / precio_entrada_1) / apalancamiento_1
+        perdida_btc_en_caida_1 = tamano_posicion_usd * ((1 / precio_liquidacion_objetivo_1) - (1 / precio_entrada_1))
+        margen_extra_necesario_1 = perdida_btc_en_caida_1 - margen_inicial_btc_1
+        margen_total_necesario_1 = margen_inicial_btc_1 + max(0, margen_extra_necesario_1)
+
+        st.write(f"- 📉 **Precio de Liquidación (-{caida_protegida_1*100}%):** ${precio_liquidacion_objetivo_1:,.2f}")
+        
+        col_res1, col_res2 = st.columns(2)
+        col_res1.info(f"**Margen Inicial:** ₿ {margen_inicial_btc_1:,.6f}")
+        
+        if margen_extra_necesario_1 > 0:
+            col_res2.error(f"**Margen Extra a Agregar:** ₿ {margen_extra_necesario_1:,.6f}")
+            st.success(f"💰 **Total de BTC que debes tener en la cuenta:** ₿ {margen_total_necesario_1:,.6f}")
+        else:
+            col_res2.success("✅ Tu margen inicial ya cubre esta caída.")
+
+with tab2:
+    st.subheader("¿De qué tamaño puede ser mi posición con los BTC que tengo?")
+    c5, c6 = st.columns(2)
+    with c5:
+        precio_entrada_2 = st.number_input("Precio de Entrada del Long", value=int(current_btc_price) if current_btc_price else 60000, step=100, key="pe_2")
+        btc_disponible = st.number_input("BTC Disponibles en Cuenta", value=0.05, step=0.01, format="%.6f", key="btc_disp")
+    with c6:
+        apalancamiento_2 = st.number_input("Apalancamiento (x)", value=10, min_value=1, step=1, key="ap_2")
+        caida_protegida_2 = st.slider("Protección de Caída Deseada (%)", min_value=10, max_value=80, value=30, step=1, key="cp_2") / 100.0
+
+    if precio_entrada_2 > 0 and btc_disponible > 0:
+        precio_liquidacion_objetivo_2 = precio_entrada_2 * (1 - caida_protegida_2)
+        
+        factor_denominador = (1 / apalancamiento_2) + (1 / (1 - caida_protegida_2)) - 1
+        posicion_maxima_usd = (btc_disponible * precio_entrada_2) / factor_denominador if factor_denominador > 0 else 0
+
+        st.write(f"- 📉 **Precio de Liquidación (-{caida_protegida_2*100}%):** ${precio_liquidacion_objetivo_2:,.2f}")
+        
+        if posicion_maxima_usd > 0:
+            st.success(f"🚀 **Tamaño Máximo de Posición Seguro:** $ {posicion_maxima_usd:,.2f} USD")
+        else:
+            st.warning("Revisa los parámetros, configuración inválida.")
