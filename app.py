@@ -84,7 +84,7 @@ precio_api, fuente_precio = get_live_btc_price()
 st.sidebar.header("🔗 Conexión a Google Drive")
 st.sidebar.markdown("Pega aquí los enlaces compartidos de tus archivos CSV.")
 
-URL_DEFECTO_SPOT = "https://drive.google.com/file/d/1fdaxnayNzqE9XNBMfO1K6JDvcfowizzq/view?usp=drive_link" 
+URL_DEFECTO_SPOT = "https://drive.google.com/file/d/1fdaxnayNzqE9XNBMfO1K6JDvcfowizzq/view?usp=sharing" 
 URL_DEFECTO_FUTUROS = "https://drive.google.com/file/d/1rgbrxHV40-Q5_ic3C1umWKfIanT2VTSA/view?usp=sharing"
 
 link_spot = st.sidebar.text_input("Enlace CSV Spot", URL_DEFECTO_SPOT)
