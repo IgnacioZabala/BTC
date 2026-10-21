@@ -96,6 +96,16 @@ st.sidebar.header("💵 Conversión a USD")
 precio_venta_usdt = 1.04
 st.sidebar.info(f"Cotización fijada (1 USDT = **{precio_venta_usdt}** USD billete).")
 
+# --- NUEVO: TOTAL EN CARTERA (BINGX) ---
+st.sidebar.markdown("---")
+st.sidebar.header("💼 Saldo Total en Exchange")
+total_btc_cartera_manual = st.sidebar.number_input(
+    "Total BTC en Cartera (BingX)", 
+    value=0.18621157, 
+    format="%.8f",
+    help="Ingresa el saldo total exacto que figura en la app de tu exchange."
+)
+
 col1, col2 = st.columns([2, 1])
 with col1:
     st.info("🔄 Los datos se sincronizan automáticamente desde Google Drive.")
@@ -150,7 +160,6 @@ if archivos_a_procesar:
 
     for source, nombre_archivo in archivos_a_procesar:
         try:
-            # Petición robusta simulando navegador para evitar bloqueos de Google Drive
             if source.startswith("http"):
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
                 res = requests.get(source, headers=headers, timeout=10)
@@ -219,33 +228,32 @@ if archivos_a_procesar:
                     fee_btc_mask = df_btc[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
                     comisiones_btc_spot += pd.to_numeric(df_btc.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
 
-                archivos_procesados.append("Spot (Google Drive)")
+                archivos_procesados.append("Spot")
 
-        # --- 2. PROCESAR FUTUROS M-MONEDA ---
+        # --- 2. PROCESAR FUTUROS M-MONEDA (Solo para extraer fees, PNL ya no define el patrimonio) ---
         elif "coin_m" in nombre_archivo or "m_moneda" in nombre_archivo:
-            pnl_col = encontrar_columna(df, ["pnl", "ganancia", "profit", "realized", "realizado"])
             fee_col = encontrar_columna(df, ["fee"])
             fee_coin_col = encontrar_columna(df, ["fee coin", "feecoin"])
 
-            if pnl_col:
-                df['PnL_BTC'] = pd.to_numeric(df[pnl_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-                total_btc_ganados_futuros += df['PnL_BTC'].sum()
+            if fee_col and fee_coin_col:
+                fee_btc_mask = df[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
+                comisiones_btc_futuros += pd.to_numeric(df.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
 
-                if fee_col and fee_coin_col:
-                    fee_btc_mask = df[fee_coin_col].astype(str).str.contains("BTC", case=False, na=False)
-                    comisiones_btc_futuros += pd.to_numeric(df.loc[fee_btc_mask, fee_col].astype(str).str.replace(',', ''), errors='coerce').abs().sum()
-
-                archivos_procesados.append("Futuros (Google Drive)")
+            archivos_procesados.append("Futuros")
 
     if len(archivos_procesados) > 0:
         st.success(f"✅ Reportes procesados correctamente: {', '.join(archivos_procesados)}")
         
         current_btc_price_usd = current_btc_price * precio_venta_usdt
-        
         dca_promedio_usdt = total_usdt_neto_invertido / total_btc_neto_spot if total_btc_neto_spot > 0 else 0
         
-        # Consolidado total exacto en cartera (Spot + Ganancias de Futuros - Fees)
-        patrimonio_total_btc = total_btc_neto_spot + total_btc_ganados_futuros - (comisiones_btc_spot + comisiones_btc_futuros)
+        # --- AQUÍ CAMBIA LA LÓGICA ---
+        # 1. El patrimonio total es exactamente el que introduces a mano en la barra lateral.
+        patrimonio_total_btc = total_btc_cartera_manual
+        
+        # 2. Los BTC ganados son simplemente la diferencia entre lo que tienes y lo que compraste.
+        # (Esto agrupa: Ganancias de futuros + Funding Fees + Airdrops - Comisiones)
+        btc_ganados_totales = patrimonio_total_btc - total_btc_neto_spot
         
         valor_actual_usd = patrimonio_total_btc * current_btc_price_usd
         ganancia_neta_usd = valor_actual_usd - total_usd_neto_invertido
@@ -301,25 +309,26 @@ if archivos_a_procesar:
         s3.metric("Valorización Spot (USD)", f"${valor_spot_usd:,.2f}")
         s4.metric("Precio DCA Promedio", f"₮ {dca_promedio_usdt:,.2f}")
 
-        # --- 2. FUTUROS ---
-        st.subheader("⚡ Rendimientos en Futuros (M-Moneda)")
-        valor_futuros_usd = total_btc_ganados_futuros * current_btc_price_usd
+        # --- 2. RENDIMIENTOS GENERADOS ---
+        st.subheader("⚡ Rendimientos Generados (Futuros, Funding, Otros)")
+        valor_ganados_usd = btc_ganados_totales * current_btc_price_usd
         
-        btc_futuros_por_dia = total_btc_ganados_futuros / dias_efectivos if dias_efectivos > 0 else 0.0
-        btc_futuros_anual = btc_futuros_por_dia * 365
+        btc_ganados_por_dia = btc_ganados_totales / dias_efectivos if dias_efectivos > 0 else 0.0
+        btc_ganados_anual = btc_ganados_por_dia * 365
         
         f1, f2, f3, f4 = st.columns(4)
-        f1.metric("BTC Ganados en Futuros", f"₿ {total_btc_ganados_futuros:,.6f}")
-        f2.metric("Valorización Futuros (USD)", f"${valor_futuros_usd:,.2f}")
-        f3.metric("BTC Ganados / Día", f"₿ {btc_futuros_por_dia:,.6f}")
-        f4.metric("Proyección a 1 Año (BTC)", f"₿ {btc_futuros_anual:,.6f}")
+        f1.metric("Total BTC Ganados", f"₿ {btc_ganados_totales:,.8f}")
+        f2.metric("Valorización Ganancias (USD)", f"${valor_ganados_usd:,.2f}")
+        f3.metric("BTC Ganados / Día", f"₿ {btc_ganados_por_dia:,.8f}")
+        f4.metric("Proyección a 1 Año (BTC)", f"₿ {btc_ganados_anual:,.6f}")
 
-        # --- 3. PATRIMONIO TOTAL CONSOLIDADO (COMO LA APP) ---
+        # --- 3. PATRIMONIO TOTAL CONSOLIDADO ---
         st.markdown("---")
         st.header("🔒 Patrimonio Total Consolidado en Cartera")
         t1, t2 = st.columns(2)
-        t1.metric("Total BTC en Cartera (Spot + Futuros)", f"₿ {patrimonio_total_btc:,.6f}")
+        t1.metric("Total BTC en Cartera (BingX)", f"₿ {patrimonio_total_btc:,.8f}")
         t2.metric("Valorización Total in USD", f"$ {valor_actual_usd:,.2f}")
+        st.caption("*(El total de BTC es el valor ingresado manualmente. Las métricas de rentabilidad se calculan en base a este número).*")
 
         # --- RENDIMIENTO GLOBAL ---
         st.markdown("---")
